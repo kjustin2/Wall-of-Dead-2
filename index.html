@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wall of Dead 2</title>
+  </head>
+  <body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="hud" aria-live="polite">
+      <div class="hud-top">
+        <div class="meter danger"><span id="hpBar"></span><label id="hpText">HP</label></div>
+        <div class="meter"><span id="staminaBar"></span><label id="staminaText">STAMINA</label></div>
+      </div>
+      <div class="hud-bottom">
+        <div id="weaponPanel">
+          <div id="weaponName">BAT</div>
+          <div id="ammoText">--</div>
+        </div>
+        <div id="objectiveText"></div>
+        <div id="promptText"></div>
+      </div>
+      <div id="crosshair" aria-hidden="true"></div>
+      <div id="narrativeText"></div>
+      <div id="deathText" hidden>
+        <h1>You did not reach the gate.</h1>
+        <button id="restartButton" type="button">Try again</button>
+      </div>
+    </div>
+    <div id="startScreen">
+      <div class="title-wrap">
+        <h1>Wall of Dead 2</h1>
+        <button id="startButton" type="button">Start New Game</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

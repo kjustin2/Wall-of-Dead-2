@@ -1,0 +1,237 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #020204;
+  color: #d8d3c7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #020204;
+}
+
+#renderCanvas {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  outline: none;
+  cursor: crosshair;
+  background: #020204;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  color: #e2dccf;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+}
+
+#hud.gameplay-hidden .hud-top,
+#hud.gameplay-hidden .hud-bottom,
+#hud.gameplay-hidden #crosshair,
+#hud.gameplay-hidden #narrativeText {
+  display: none;
+}
+
+.hud-top {
+  position: absolute;
+  left: 22px;
+  top: 18px;
+  display: grid;
+  gap: 8px;
+  width: min(390px, calc(100vw - 44px));
+}
+
+.meter {
+  position: relative;
+  height: 14px;
+  border: 1px solid rgba(185, 170, 140, 0.45);
+  background: rgba(5, 5, 7, 0.72);
+  overflow: hidden;
+}
+
+.meter span {
+  display: block;
+  height: 100%;
+  width: 50%;
+  background: linear-gradient(90deg, #665d44, #d8be6c);
+  box-shadow: 0 0 14px rgba(216, 190, 108, 0.45);
+}
+
+.meter.danger span {
+  background: linear-gradient(90deg, #4d0710, #b3202d);
+  box-shadow: 0 0 14px rgba(179, 32, 45, 0.52);
+}
+
+.meter label {
+  position: absolute;
+  inset: 0 7px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: rgba(238, 230, 212, 0.88);
+}
+
+.hud-bottom {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 20px;
+  display: grid;
+  grid-template-columns: minmax(120px, 210px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: end;
+}
+
+#weaponPanel {
+  min-width: 0;
+  min-height: 58px;
+  padding: 10px 12px;
+  border-left: 2px solid rgba(199, 168, 96, 0.7);
+  background: linear-gradient(90deg, rgba(7, 6, 7, 0.7), rgba(7, 6, 7, 0.1));
+}
+
+#weaponName {
+  font-size: 15px;
+  font-weight: 800;
+  color: #ebd7a0;
+  overflow-wrap: anywhere;
+}
+
+#ammoText {
+  margin-top: 4px;
+  font-family: "Consolas", monospace;
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+
+#objectiveText {
+  min-width: 0;
+  align-self: center;
+  font-size: clamp(14px, 1.8vw, 20px);
+  font-weight: 650;
+  color: rgba(232, 226, 212, 0.88);
+  overflow-wrap: anywhere;
+}
+
+#promptText {
+  grid-column: 1 / -1;
+  min-height: 22px;
+  color: #f2d98d;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+#crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(222, 206, 168, 0.55);
+  background: rgba(12, 10, 8, 0.28);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.9);
+}
+
+#narrativeText {
+  position: absolute;
+  left: 50%;
+  top: 70%;
+  width: min(720px, calc(100vw - 36px));
+  transform: translate(-50%, -50%);
+  font-size: clamp(18px, 2.3vw, 30px);
+  line-height: 1.25;
+  text-align: center;
+  color: #f0e4c8;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  transition: opacity 180ms linear;
+}
+
+#narrativeText.visible {
+  opacity: 1;
+}
+
+#startScreen,
+#deathText {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(91, 19, 24, 0.28), transparent 34%),
+    linear-gradient(180deg, rgba(2, 2, 4, 0.55), rgba(2, 2, 4, 0.96)),
+    #020204;
+  z-index: 5;
+}
+
+#deathText[hidden] {
+  display: none;
+}
+
+#startScreen {
+  display: none;
+}
+
+.title-wrap,
+#deathText {
+  width: min(820px, calc(100vw - 34px));
+  text-align: left;
+  padding: 0 18px;
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(42px, 8vw, 96px);
+  line-height: 0.95;
+  letter-spacing: 0;
+  color: #ece4d4;
+  overflow-wrap: anywhere;
+}
+
+button {
+  pointer-events: auto;
+  border: 1px solid rgba(236, 212, 156, 0.75);
+  background: rgba(56, 20, 20, 0.86);
+  color: #f4e4bf;
+  min-width: 144px;
+  min-height: 44px;
+  padding: 10px 18px;
+  font-size: 16px;
+  font-weight: 800;
+  white-space: normal;
+}
+
+button:hover {
+  background: rgba(92, 28, 28, 0.94);
+}
+
+@media (max-width: 640px) {
+  .hud-bottom {
+    grid-template-columns: 1fr;
+  }
+
+  #weaponPanel {
+    width: min(190px, calc(100vw - 44px));
+  }
+
+  #narrativeText {
+    top: 66%;
+    font-size: clamp(16px, 5vw, 22px);
+  }
+}

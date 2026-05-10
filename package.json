@@ -1,0 +1,73 @@
+{
+  "name": "wall-of-dead-2",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone-first 3D survival horror prototype built with Babylon.js and Electron.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "electron": "electron .",
+    "electron:dev": "node scripts/electron-dev.cjs",
+    "electron:smoke": "node scripts/electron-smoke.cjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit",
+    "verify:runtime": "tsx scripts/verify-babylon-runtime.ts",
+    "test:smoke": "tsx scripts/test-smoke.ts",
+    "test:startup": "tsx scripts/test-startup.ts",
+    "test:campaign": "tsx scripts/test-campaign.ts",
+    "test": "npm run test:smoke && npm run test:startup && npm run test:campaign",
+    "verify": "npm run typecheck && npm run verify:runtime && npm run test && npm run build && npm run electron:smoke",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^9.3.4",
+    "@babylonjs/gui": "^9.3.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "com.wallofdead2.game",
+    "productName": "Wall of Dead 2",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Wall of Dead 2"
+    }
+  }
+}
