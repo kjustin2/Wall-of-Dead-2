@@ -303,12 +303,17 @@ for (const id of ["btn-retry", "btn-again"]) {
 
 document.addEventListener("pointerlockchange", () => {
   if (state === "playing" && !input.locked) {
+    // lock lost (Esc / alt-tab): dismiss any open note so resuming drops you
+    // back into the world rather than a stale modal, then pause
+    if (hud.noteOpen) hud.closeNote();
+    player.frozen = director.over;
     state = "paused";
     input.enabled = false;
     hud.showScreen("pause");
   } else if (state === "paused" && input.locked) {
     state = "playing";
     input.enabled = true;
+    player.frozen = director.over; // never resume stuck-frozen
     hud.showScreen(null);
   }
 });
@@ -345,10 +350,16 @@ function frame(): void {
   const t = clock.elapsedTime;
 
   if (state === "playing") {
-    // note reader handling
-    if (hud.noteOpen) {
+    // Capture modal state at the START of the frame. The E press that closes a
+    // note must not also drive a world interaction later in the same frame
+    // (input isn't flushed until end of frame), or it would instantly re-open
+    // the same note and trap the reader.
+    const noteWasOpen = hud.noteOpen;
+    if (noteWasOpen) {
       player.frozen = true;
-      if (input.justPressed("KeyE") || input.justPressed("Escape")) {
+      // E closes the note. (Escape can't reach here under pointer lock — it
+      // releases the lock and is handled as a pause below.)
+      if (input.justPressed("KeyE")) {
         hud.closeNote();
         player.frozen = director.over;
       }
@@ -357,9 +368,10 @@ function frame(): void {
     player.update(dt);
     if (input.justPressed("KeyQ")) throwBottle();
 
-    // interaction
+    // interaction — suppressed on any frame a note was open so the closing E
+    // press is consumed exactly once
     let target: InteractTarget | null = null;
-    if (!hud.noteOpen && !director.over) {
+    if (!noteWasOpen && !director.over) {
       target = findTarget();
       const text = target ? director.promptFor(target) : null;
       hud.prompt(text);

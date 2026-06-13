@@ -32,6 +32,61 @@ function check(name, ok) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ---------- run 0: note reader open/close (regression for "E won't close note") ----------
+// Driven by REAL key presses through the game loop — the bug was loop-ordering
+// (the closing E being consumed a second time and re-opening the note), which
+// calling director.interact() directly would not reproduce.
+await page.goto(URL, { waitUntil: "networkidle0" });
+await page.click("#btn-start");
+await sleep(1200);
+
+// stand 2m south of the work-order note (cell 20,28), facing north toward it
+await page.evaluate(() => {
+  const g = window.__game;
+  g.player.x = 20 * 2 + 1;
+  g.player.z = 28 * 2 + 1 + 2;
+  g.player.yaw = 0; // forward = -z = toward the note
+  g.player.pitch = 0;
+  g.player.lightOn = true;
+  g.player.battery = 1;
+});
+await sleep(200);
+
+const promptShown = await page.evaluate(() => document.getElementById("prompt").textContent || "");
+check("note: read prompt offered when aimed at note", /read/i.test(promptShown));
+
+await page.keyboard.press("KeyE");
+const noteOpened = await page
+  .waitForFunction(() => window.__game.hud.noteOpen, { timeout: 4000 })
+  .then(() => true)
+  .catch(() => false);
+check("note: E opens the note", noteOpened);
+
+await sleep(250);
+await page.keyboard.press("KeyE"); // close — must STAY closed (not close+reopen)
+await sleep(450);
+const afterClose = await page.evaluate(() => ({
+  noteOpen: window.__game.hud.noteOpen,
+  frozen: window.__game.player.frozen
+}));
+check("note: E closes the note and it stays closed", afterClose.noteOpen === false);
+check("note: player is unfrozen after closing", afterClose.frozen === false);
+
+// the loop is fully cyclic: a fresh E re-opens the note. (Movement is gated
+// solely on player.frozen, already asserted false above, so this + the
+// unfrozen check together prove the game is playable again — deterministically,
+// without depending on a real W keypress landing in headless.)
+await page.keyboard.press("KeyE");
+const reopened = await page
+  .waitForFunction(() => window.__game.hud.noteOpen, { timeout: 4000 })
+  .then(() => true)
+  .catch(() => false);
+check("note: a fresh E re-opens the note (loop is cyclic)", reopened);
+await page.keyboard.press("KeyE");
+await sleep(400);
+const reclosed = await page.evaluate(() => window.__game.hud.noteOpen === false);
+check("note: the second close also sticks", reclosed);
+
 // ---------- run 1: full win path ----------
 await page.goto(URL, { waitUntil: "networkidle0" });
 await page.click("#btn-start");
@@ -126,10 +181,21 @@ r = await page
 check("win screen shows", r);
 await page.screenshot({ path: `${SHOTS}/e2e-win.png` });
 
-// ---------- run 2: death path ----------
+// ---------- run 2: death path (while reading a note) ----------
 await page.goto(URL, { waitUntil: "networkidle0" });
 await page.click("#btn-start");
 await sleep(1200);
+// open a note, then get killed mid-read
+await page.evaluate(() => {
+  const g = window.__game;
+  g.player.x = 20 * 2 + 1;
+  g.player.z = 28 * 2 + 1 + 2;
+  g.player.yaw = 0;
+  g.player.pitch = 0;
+});
+await sleep(150);
+await page.keyboard.press("KeyE");
+await page.waitForFunction(() => window.__game.hud.noteOpen, { timeout: 4000 }).catch(() => {});
 await page.evaluate(() => {
   const g = window.__game;
   g.stalker.activate();
@@ -140,6 +206,8 @@ r = await page
   .then(() => true)
   .catch(() => false);
 check("death screen shows on contact", r);
+const noteClosedOnDeath = await page.evaluate(() => window.__game.hud.noteOpen === false);
+check("note: dismissed when death occurs while reading", noteClosedOnDeath);
 await page.screenshot({ path: `${SHOTS}/e2e-dead.png` });
 
 await browser.close();

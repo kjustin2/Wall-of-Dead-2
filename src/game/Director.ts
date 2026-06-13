@@ -339,6 +339,7 @@ export class Director {
     this.over = true;
     this.dying = true;
     this.player.frozen = true;
+    this.hud.closeNote(); // never leave a note open under the kill-cam
     this.fx.killScream();
     this.hud.damageFlash(1);
     this.hud.chase(false);
@@ -351,6 +352,7 @@ export class Director {
     if (this.over) return;
     this.over = true;
     this.player.frozen = true;
+    this.hud.closeNote();
     this.chase = false;
     this.hud.chase(false);
     this.fx.slam(this.player.x, this.player.z, true);
