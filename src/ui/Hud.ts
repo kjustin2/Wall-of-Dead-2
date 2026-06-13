@@ -1,72 +1,121 @@
-import { Player } from "../game/Player";
-
-function el<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`missing #${id}`);
-  return node as T;
+function el<T extends HTMLElement = HTMLElement>(id: string): T {
+  return document.getElementById(id) as T;
 }
 
 export class Hud {
-  private hud = el<HTMLDivElement>("hud");
-  private hpBar = el<HTMLSpanElement>("hpBar");
-  private hpText = el<HTMLLabelElement>("hpText");
-  private staminaBar = el<HTMLSpanElement>("staminaBar");
-  private staminaText = el<HTMLLabelElement>("staminaText");
-  private weaponName = el<HTMLDivElement>("weaponName");
-  private ammoText = el<HTMLDivElement>("ammoText");
-  private objectiveText = el<HTMLDivElement>("objectiveText");
-  private promptText = el<HTMLDivElement>("promptText");
-  private narrativeText = el<HTMLDivElement>("narrativeText");
-  private deathText = el<HTMLDivElement>("deathText");
-  private startScreen = el<HTMLDivElement>("startScreen");
-  private narrativeTimer = 0;
+  private objective = el("objective");
+  private subtitleEl = el("subtitle");
+  private promptEl = el("prompt");
+  private batteryFill = el("battery-fill");
+  private batteryBox = el("battery");
+  private bottlesEl = el("bottles");
+  private staminaBox = el("stamina");
+  private staminaFill = el("stamina-fill");
+  private noteBox = el("note");
+  private noteTitle = el("note-title");
+  private noteBody = el("note-body");
+  private damageEl = el("damage");
+  private chaseEl = el("chase-vignette");
+  private blackoutEl = el("blackout");
+  private grain = el<HTMLCanvasElement>("grain");
+  private subTimer = 0;
+  noteOpen = false;
 
-  setGameplayVisible(visible: boolean): void {
-    this.hud.classList.toggle("gameplay-hidden", !visible);
+  constructor() {
+    this.grain.width = 160;
+    this.grain.height = 90;
+    setInterval(() => this.drawGrain(), 80);
   }
 
-  setStartVisible(visible: boolean): void {
-    this.startScreen.style.display = visible ? "grid" : "none";
+  private drawGrain(): void {
+    const g = this.grain.getContext("2d")!;
+    const img = g.createImageData(160, 90);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = (Math.random() * 255) | 0;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
   }
 
-  showDeath(visible: boolean): void {
-    this.deathText.hidden = !visible;
+  show(): void {
+    el("hud").classList.remove("hidden");
   }
 
   setObjective(text: string): void {
-    this.objectiveText.textContent = text;
+    this.objective.textContent = text;
   }
 
-  setPrompt(text: string): void {
-    this.promptText.textContent = text;
+  subtitle(text: string, dur = 4.5): void {
+    this.subtitleEl.textContent = text;
+    this.subtitleEl.classList.add("show");
+    this.subTimer = dur;
   }
 
-  showNarrative(text: string, duration = 4.2): void {
-    this.narrativeText.textContent = text;
-    this.narrativeText.classList.add("visible");
-    this.narrativeTimer = duration;
-  }
-
-  update(dt: number, player: Player, dread: number): void {
-    if (this.narrativeTimer > 0) {
-      this.narrativeTimer = Math.max(0, this.narrativeTimer - dt);
-      if (this.narrativeTimer === 0) this.narrativeText.classList.remove("visible");
-    }
-    const hp = Math.max(0, player.hp / player.maxHp);
-    const st = Math.max(0, player.stamina / player.maxStamina);
-    this.hpBar.style.width = `${hp * 100}%`;
-    this.staminaBar.style.width = `${st * 100}%`;
-    this.hpText.textContent = `HP ${Math.ceil(player.hp)}`;
-    this.staminaText.textContent = `STAMINA ${Math.ceil(player.stamina)}`;
-    const w = player.weapon;
-    this.weaponName.textContent = w.def.name;
-    if (w.def.ammoType === "none") {
-      this.ammoText.textContent = "MELEE";
-    } else if (w.reloadTimer > 0) {
-      this.ammoText.textContent = "RELOADING";
+  prompt(text: string | null, key = "E"): void {
+    if (!text) {
+      this.promptEl.textContent = "";
     } else {
-      this.ammoText.textContent = `${w.mag} / ${w.reserve}`;
+      this.promptEl.innerHTML = `<span class="key">${key}</span>${text}`;
     }
-    document.body.style.filter = dread > 0.72 ? `saturate(${0.9 + dread * 0.25})` : "";
+  }
+
+  battery(frac: number, on: boolean): void {
+    this.batteryFill.style.width = `${Math.round(frac * 100)}%`;
+    this.batteryFill.classList.toggle("low", frac < 0.2);
+    this.batteryBox.classList.toggle("off", !on);
+  }
+
+  bottles(n: number): void {
+    this.bottlesEl.textContent = String(n);
+  }
+
+  stamina(frac: number, exhausted: boolean): void {
+    this.staminaBox.classList.toggle("show", frac < 0.995);
+    this.staminaFill.style.width = `${Math.round(frac * 100)}%`;
+    this.staminaFill.classList.toggle("gone", exhausted);
+  }
+
+  openNote(title: string, body: string): void {
+    this.noteTitle.textContent = title;
+    this.noteBody.textContent = body;
+    this.noteBox.classList.remove("hidden");
+    this.noteOpen = true;
+  }
+
+  closeNote(): void {
+    this.noteBox.classList.add("hidden");
+    this.noteOpen = false;
+  }
+
+  damageFlash(strength = 0.8): void {
+    this.damageEl.style.transition = "none";
+    this.damageEl.style.opacity = String(strength);
+    requestAnimationFrame(() => {
+      this.damageEl.style.transition = "opacity 1.4s";
+      this.damageEl.style.opacity = "0";
+    });
+  }
+
+  chase(on: boolean): void {
+    this.chaseEl.classList.toggle("on", on);
+  }
+
+  blackout(opacity: number, seconds: number): void {
+    this.blackoutEl.style.transition = `opacity ${seconds}s`;
+    this.blackoutEl.style.opacity = String(opacity);
+  }
+
+  update(dt: number): void {
+    if (this.subTimer > 0) {
+      this.subTimer -= dt;
+      if (this.subTimer <= 0) this.subtitleEl.classList.remove("show");
+    }
+  }
+
+  showScreen(id: "title" | "pause" | "dead" | "win" | null): void {
+    for (const s of ["title", "pause", "dead", "win"]) {
+      el(s).classList.toggle("hidden", s !== id);
+    }
   }
 }

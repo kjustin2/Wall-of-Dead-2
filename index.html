@@ -1,38 +1,92 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Wall of Dead 2</title>
-  </head>
-  <body>
-    <canvas id="renderCanvas"></canvas>
-    <div id="hud" aria-live="polite">
-      <div class="hud-top">
-        <div class="meter danger"><span id="hpBar"></span><label id="hpText">HP</label></div>
-        <div class="meter"><span id="staminaBar"></span><label id="staminaText">STAMINA</label></div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DEAD AIR</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23050607'/%3E%3Ccircle cx='8' cy='8' r='4' fill='none' stroke='%239c2e1c' stroke-width='1.5'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- in-game HUD -->
+  <div id="hud" class="hidden">
+    <div id="objective"></div>
+    <div id="crosshair"></div>
+    <div id="prompt"></div>
+    <div id="subtitle"></div>
+    <div id="meters">
+      <div id="battery-wrap" title="flashlight battery">
+        <div id="battery-label">TORCH&nbsp;<span class="key">F</span></div>
+        <div id="battery"><div id="battery-fill"></div></div>
       </div>
-      <div class="hud-bottom">
-        <div id="weaponPanel">
-          <div id="weaponName">BAT</div>
-          <div id="ammoText">--</div>
-        </div>
-        <div id="objectiveText"></div>
-        <div id="promptText"></div>
-      </div>
-      <div id="crosshair" aria-hidden="true"></div>
-      <div id="narrativeText"></div>
-      <div id="deathText" hidden>
-        <h1>You did not reach the gate.</h1>
-        <button id="restartButton" type="button">Try again</button>
-      </div>
-    </div>
-    <div id="startScreen">
-      <div class="title-wrap">
-        <h1>Wall of Dead 2</h1>
-        <button id="startButton" type="button">Start New Game</button>
+      <div id="bottles-wrap">
+        <div id="battery-label">GLASS&nbsp;<span class="key">Q</span></div>
+        <div id="bottles">0</div>
       </div>
     </div>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+    <div id="stamina-wrap"><div id="stamina"><div id="stamina-fill"></div></div></div>
+  </div>
+
+  <!-- note reader -->
+  <div id="note" class="hidden">
+    <div id="note-paper">
+      <div id="note-title"></div>
+      <div id="note-body"></div>
+      <div id="note-close">E&nbsp;&mdash;&nbsp;put it down</div>
+    </div>
+  </div>
+
+  <!-- overlays -->
+  <div id="vignette"></div>
+  <div id="chase-vignette"></div>
+  <div id="damage"></div>
+  <canvas id="grain"></canvas>
+  <div id="blackout"></div>
+
+  <!-- screens -->
+  <div id="title" class="screen">
+    <div class="screen-inner">
+      <h1>DEAD&nbsp;AIR</h1>
+      <p class="byline">a vertical slice</p>
+      <p class="story">
+        Repeater 4 went silent nine days ago, but the surface feed still loops the
+        same survivor count. Two breaker fuses were pulled from the generator rack
+        &mdash; pulled, not blown. You are the one they sent down to put them back.
+      </p>
+      <div class="controls">
+        <span><b>WASD</b> move</span><span><b>SHIFT</b> run</span><span><b>CTRL</b> crouch</span>
+        <span><b>F</b> torch</span><span><b>E</b> interact</span><span><b>Q</b> throw glass</span>
+      </div>
+      <p class="hint">It hunts light first, sound second. The torch is not your friend.</p>
+      <button id="btn-start">DESCEND</button>
+    </div>
+  </div>
+
+  <div id="pause" class="screen hidden">
+    <div class="screen-inner">
+      <h2>PAUSED</h2>
+      <button id="btn-resume">RESUME</button>
+    </div>
+  </div>
+
+  <div id="dead" class="screen hidden">
+    <div class="screen-inner">
+      <h2 class="red">THE COUNT HOLDS</h2>
+      <p class="story" id="dead-text"></p>
+      <button id="btn-retry">DESCEND AGAIN</button>
+    </div>
+  </div>
+
+  <div id="win" class="screen hidden">
+    <div class="screen-inner">
+      <h2 class="green">SIGNAL RESTORED</h2>
+      <p class="story" id="win-text"></p>
+      <button id="btn-again">PLAY AGAIN</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
 </html>

@@ -1,182 +1,150 @@
-import { Scene } from "@babylonjs/core/scene";
-import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
-import { Mesh } from "@babylonjs/core/Meshes/mesh";
-import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { Color3 } from "@babylonjs/core/Maths/math.color";
-import { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
-import { WeaponDef, WeaponId, WEAPONS, STARTING_INVENTORY, AmmoType } from "../data/content";
-import { makeMat } from "./ProceduralArt";
-import { dampCoeff } from "../util/math";
+import type { Input } from "../core/Input";
+import type { AudioFX } from "../core/AudioFX";
+import type { Level } from "../world/Level";
 
-export interface WeaponState {
-  id: WeaponId;
-  def: WeaponDef;
-  mag: number;
-  reserve: number;
-  cooldown: number;
-  reloadTimer: number;
-}
+const WALK = 3.1;
+const SPRINT = 5.1;
+const CROUCH = 1.5;
+const EYE_STAND = 1.62;
+const EYE_CROUCH = 0.95;
+export const PLAYER_R = 0.32;
 
 export class Player {
-  root: TransformNode;
-  body: Mesh;
-  head: Mesh;
-  weaponMesh: Mesh;
-  hp = 100;
-  maxHp = 100;
-  stamina = 100;
-  maxStamina = 100;
-  medkits = 1;
-  radius = 0.42;
-  inventory: WeaponState[];
-  selected = 0;
-  invuln = 0;
-  noise = 0;
-  dead = false;
-  private yawTarget = 0;
-  private swingTimer = 0;
+  x = 0;
+  z = 0;
+  yaw = 0;
+  pitch = 0;
+  eyeY = EYE_STAND;
+  private vx = 0;
+  private vz = 0;
 
-  constructor(private scene: Scene, shadow: ShadowGenerator) {
-    this.root = new TransformNode("playerRoot", scene);
-    this.root.position.y = 0;
+  stamina = 1;
+  exhausted = false;
+  crouching = false;
+  sprinting = false;
+  moving = false;
 
-    const bodyMat = makeMat(scene, "playerBody", new Color3(0.55, 0.55, 0.48), new Color3(0.025, 0.035, 0.025));
-    const headMat = makeMat(scene, "playerHead", new Color3(0.42, 0.38, 0.34), new Color3(0.02, 0.015, 0.012));
-    const weaponMat = makeMat(scene, "playerWeapon", new Color3(0.18, 0.16, 0.13), new Color3(0.04, 0.028, 0.015));
+  battery = 0.7;
+  lightOn = false;
+  bottles = 0;
 
-    this.body = MeshBuilder.CreateCapsule("playerBody", { radius: 0.32, height: 1.35 }, scene);
-    this.body.parent = this.root;
-    this.body.position.y = 0.72;
-    this.body.material = bodyMat;
-    this.head = MeshBuilder.CreateSphere("playerHead", { diameter: 0.36, segments: 10 }, scene);
-    this.head.parent = this.root;
-    this.head.position.set(0, 1.52, 0.04);
-    this.head.material = headMat;
-    this.weaponMesh = MeshBuilder.CreateBox("playerWeapon", { width: 0.12, height: 0.12, depth: 0.9 }, scene);
-    this.weaponMesh.parent = this.root;
-    this.weaponMesh.position.set(0.34, 1.05, 0.42);
-    this.weaponMesh.rotation.x = 0.15;
-    this.weaponMesh.material = weaponMat;
-    this.body.isVisible = false;
-    this.head.isVisible = false;
-    this.weaponMesh.isVisible = false;
-    shadow.addShadowCaster(this.body);
-    shadow.addShadowCaster(this.head);
-    shadow.addShadowCaster(this.weaponMesh);
+  frozen = false; // director can lock input
 
-    this.inventory = STARTING_INVENTORY.map((id) => this.createWeaponState(id));
+  private bobT = 0;
+  bobOffset = 0;
+  /** camera roll from strafing, radians */
+  lean = 0;
+  private strideAcc = 0;
+
+  constructor(
+    private input: Input,
+    private fx: AudioFX,
+    private level: Level
+  ) {}
+
+  get speedFrac(): number {
+    return Math.hypot(this.vx, this.vz) / SPRINT;
   }
 
-  get position(): Vector3 {
-    return this.root.position;
-  }
+  update(dt: number): void {
+    const input = this.input;
+    if (!this.frozen) {
+      this.yaw -= input.mouseDX * 0.0022;
+      this.pitch -= input.mouseDY * 0.0022;
+      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
+    }
 
-  get weapon(): WeaponState {
-    return this.inventory[this.selected];
-  }
+    // movement intent
+    let fwd = 0;
+    let strafe = 0;
+    if (!this.frozen) {
+      if (input.isDown("KeyW") || input.isDown("ArrowUp")) fwd += 1;
+      if (input.isDown("KeyS") || input.isDown("ArrowDown")) fwd -= 1;
+      if (input.isDown("KeyA") || input.isDown("ArrowLeft")) strafe -= 1;
+      if (input.isDown("KeyD") || input.isDown("ArrowRight")) strafe += 1;
+    }
+    const wantMove = fwd !== 0 || strafe !== 0;
+    this.crouching = !this.frozen && (input.isDown("ControlLeft") || input.isDown("KeyC"));
+    const wantSprint = input.isDown("ShiftLeft") && fwd > 0 && !this.crouching;
 
-  select(slot: number): void {
-    if (slot >= 0 && slot < this.inventory.length) this.selected = slot;
-  }
+    // stamina
+    if (wantSprint && !this.exhausted && wantMove) {
+      this.stamina = Math.max(0, this.stamina - dt * 0.21);
+      if (this.stamina <= 0) this.exhausted = true;
+      this.sprinting = true;
+    } else {
+      this.stamina = Math.min(1, this.stamina + dt * 0.13);
+      if (this.exhausted && this.stamina > 0.3) this.exhausted = false;
+      this.sprinting = false;
+    }
+    if (this.exhausted) this.sprinting = false;
+    const speed = this.sprinting ? SPRINT : this.crouching ? CROUCH : WALK;
 
-  cycle(dir: number): void {
-    if (this.inventory.length === 0 || dir === 0) return;
-    this.selected = (this.selected + dir + this.inventory.length) % this.inventory.length;
-  }
+    // direction in world space
+    const sin = Math.sin(this.yaw);
+    const cos = Math.cos(this.yaw);
+    let dx = (-sin * fwd + cos * strafe);
+    let dz = (-cos * fwd - sin * strafe);
+    const len = Math.hypot(dx, dz);
+    if (len > 0.001) {
+      dx /= len;
+      dz /= len;
+    }
 
-  resetInventory(): void {
-    this.inventory = STARTING_INVENTORY.map((id) => this.createWeaponState(id));
-    this.selected = 0;
-  }
+    // smooth accelerate
+    const accel = wantMove ? 14 : 11;
+    this.vx += (dx * speed - this.vx) * Math.min(1, accel * dt);
+    this.vz += (dz * speed - this.vz) * Math.min(1, accel * dt);
+    const moved = Math.hypot(this.vx, this.vz) * dt;
+    [this.x, this.z] = this.level.moveCircle(this.x, this.z, this.vx * dt, this.vz * dt, PLAYER_R);
+    this.moving = moved > 0.005;
 
-  addWeapon(id: WeaponId): boolean {
-    if (this.inventory.some((weapon) => weapon.id === id)) return false;
-    this.inventory.push(this.createWeaponState(id));
-    return true;
-  }
+    // crouch height
+    const targetEye = this.crouching ? EYE_CROUCH : EYE_STAND;
+    this.eyeY += (targetEye - this.eyeY) * Math.min(1, 10 * dt);
 
-  addSupplies(ammo: Partial<Record<AmmoType, number>> | undefined, medkits = 0): void {
-    if (ammo) {
-      for (const weapon of this.inventory) {
-        if (weapon.def.ammoType === "none") continue;
-        weapon.reserve += ammo[weapon.def.ammoType] ?? 0;
+    // strafe lean
+    this.lean += (strafe * -0.016 - this.lean) * Math.min(1, 7 * dt);
+
+    // head bob + footsteps
+    if (this.moving) {
+      const rate = this.sprinting ? 9.4 : this.crouching ? 4.2 : 6.4;
+      this.bobT += dt * rate;
+      this.bobOffset = Math.sin(this.bobT) * (this.sprinting ? 0.055 : 0.032);
+      this.strideAcc += moved;
+      const stride = this.crouching ? 1.5 : this.sprinting ? 2.4 : 2.0;
+      if (this.strideAcc >= stride) {
+        this.strideAcc = 0;
+        this.fx.stepPlayer(this.speedFrac, this.crouching);
+        const loud = this.crouching ? 1.2 : this.sprinting ? 9 : 4;
+        this.level.addNoise(this.x, this.z, loud);
+      }
+    } else {
+      this.bobOffset *= 1 - Math.min(1, 8 * dt);
+      this.strideAcc = 0;
+    }
+
+    // flashlight
+    if (!this.frozen && input.justPressed("KeyF")) {
+      if (this.battery > 0 || this.lightOn) {
+        this.lightOn = !this.lightOn;
+        this.fx.uiClick();
       }
     }
-    this.medkits += medkits;
-  }
-
-  takeDamage(amount: number): boolean {
-    if (this.invuln > 0 || this.dead) return false;
-    this.hp = Math.max(0, this.hp - amount);
-    this.invuln = 0.36;
-    if (this.hp <= 0) this.dead = true;
-    return true;
-  }
-
-  useMedkit(): boolean {
-    if (this.medkits <= 0 || this.hp >= this.maxHp || this.dead) return false;
-    this.medkits--;
-    this.hp = Math.min(this.maxHp, this.hp + 42);
-    return true;
-  }
-
-  startReload(): boolean {
-    const w = this.weapon;
-    if (w.def.ammoType === "none" || w.reloadTimer > 0 || w.mag >= w.def.magSize || w.reserve <= 0) return false;
-    w.reloadTimer = w.def.reloadTime;
-    return true;
-  }
-
-  canFire(held: boolean): boolean {
-    const w = this.weapon;
-    if (w.reloadTimer > 0 || w.cooldown > 0) return false;
-    if (!w.def.automatic && held && !w.def.melee) return false;
-    if (w.def.ammoType !== "none" && w.mag <= 0) return false;
-    return true;
-  }
-
-  spendShot(): void {
-    const w = this.weapon;
-    if (w.def.ammoType !== "none") w.mag = Math.max(0, w.mag - 1);
-    w.cooldown = 1 / w.def.fireRate;
-    this.noise = Math.min(1, this.noise + w.def.noise);
-    this.swingTimer = w.def.melee ? 0.18 : 0.08;
-  }
-
-  update(dt: number, moving: boolean, sprinting: boolean, yaw: number): void {
-    this.invuln = Math.max(0, this.invuln - dt);
-    this.noise = Math.max(0, this.noise - dt * 0.12);
-    for (const w of this.inventory) {
-      w.cooldown = Math.max(0, w.cooldown - dt);
-      if (w.reloadTimer > 0) {
-        w.reloadTimer = Math.max(0, w.reloadTimer - dt);
-        if (w.reloadTimer === 0) {
-          const need = w.def.magSize - w.mag;
-          const take = Math.min(need, w.reserve);
-          w.mag += take;
-          w.reserve -= take;
-        }
-      }
+    if (this.lightOn) {
+      this.battery = Math.max(0, this.battery - dt * 0.0042);
+      if (this.battery <= 0) this.lightOn = false;
     }
-    if (sprinting && moving && this.stamina > 0) this.stamina = Math.max(0, this.stamina - dt * 24);
-    else this.stamina = Math.min(this.maxStamina, this.stamina + dt * 18);
-    this.yawTarget = yaw;
-    const diff = ((this.yawTarget - this.root.rotation.y + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-    this.root.rotation.y += diff * dampCoeff(18, dt);
-    this.swingTimer = Math.max(0, this.swingTimer - dt);
-    this.weaponMesh.rotation.x = 0.15 + Math.sin(this.swingTimer * 35) * 0.22;
-    const flash = this.invuln > 0 ? 0.45 + 0.55 * Math.sin(performance.now() * 0.035) : 1;
-    this.body.visibility = flash;
-    this.head.visibility = flash;
+
+    this.fx.setListener(this.x, this.z, this.yaw);
   }
 
-  dispose(): void {
-    this.root.dispose(false, true);
+  addBattery(amount: number): void {
+    this.battery = Math.min(1, this.battery + amount);
   }
 
-  private createWeaponState(id: WeaponId): WeaponState {
-    const def = WEAPONS[id];
-    return { id, def, mag: def.magSize, reserve: def.startReserve, cooldown: 0, reloadTimer: 0 };
+  /** forward unit vector (XZ) */
+  forward(): [number, number] {
+    return [-Math.sin(this.yaw), -Math.cos(this.yaw)];
   }
 }
