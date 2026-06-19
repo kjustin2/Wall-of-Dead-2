@@ -8,6 +8,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "assets": "node scripts/fetch-assets.mjs",
+    "standalone": "npm run build && electron electron/main.cjs",
     "smoke": "node scripts/smoke.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "tour": "node scripts/tour.mjs"
@@ -17,6 +19,7 @@
   },
   "devDependencies": {
     "@types/three": "^0.180.0",
+    "electron": "^42.4.1",
     "puppeteer-core": "^24.9.0",
     "typescript": "^5.8.3",
     "vite": "^7.1.0"

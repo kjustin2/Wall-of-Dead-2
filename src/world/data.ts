@@ -6,7 +6,7 @@
 
 export const CELL = 2;
 export const GRID_W = 46;
-export const GRID_H = 33;
+export const GRID_H = 48; // extended south for the Act III sub-level
 export const WALL_H = 3;
 
 export interface RectDef { x: number; y: number; w: number; h: number; name?: string }
@@ -22,7 +22,12 @@ export const ROOMS: RectDef[] = [
   { x: 12, y: 12, w: 16, h: 11, name: "concourse" },  // central concourse
   { x: 19, y: 5, w: 1, h: 6, name: "northLink" },     // concourse->corridor link
   { x: 17, y: 24, w: 6, h: 7, name: "stairwell" },    // start room, S
-  { x: 3, y: 14, w: 8, h: 7, name: "office" }         // maintenance office, W
+  { x: 3, y: 14, w: 8, h: 7, name: "office" },        // maintenance office, W
+  // --- Act III sub-level (below the stairwell) ---
+  { x: 19, y: 31, w: 1, h: 4, name: "subStair" },     // service stair down
+  { x: 7, y: 35, w: 22, h: 7, name: "subHall" },      // intake / archive hall
+  { x: 11, y: 42, w: 9, h: 5, name: "core" },         // repeater core
+  { x: 22, y: 42, w: 5, h: 4, name: "pump" }          // side pump room
 ];
 
 export type DoorKind = "normal" | "fire";
@@ -53,7 +58,11 @@ export const DOOR_DEFS: DoorDef[] = [
   { id: "d_stair", cx: 19, cy: 23, axis: "z", kind: "normal" },
   {
     id: "d_north", cx: 19, cy: 11, axis: "z", kind: "normal", locked: true,
-    lockedText: "EMERGENCY EXIT ROUTE — the magnetic lock is live even with the grid dead."
+    lockedText: "EMERGENCY EXIT ROUTE — the lock holds until the signal goes back out."
+  },
+  {
+    id: "d_service", cx: 19, cy: 31, axis: "z", kind: "normal", locked: true,
+    lockedText: "SERVICE STAIR — sealed until the main grid is live."
   }
 ];
 
@@ -73,10 +82,16 @@ export const PROPS: PropDef[] = [
   { kind: "barrel", cx: 12, cy: 22 },
   { kind: "crates", cx: 37, cy: 2 },
   { kind: "barrel", cx: 37, cy: 7 },
-  { kind: "crates", cx: 17, cy: 30 }
+  { kind: "crates", cx: 17, cy: 30 },
+  // sub-level dressing — the operator's desk faces the dead core
+  { kind: "desk", cx: 15, cy: 43 },
+  { kind: "bench", cx: 10, cy: 40, rot: Math.PI / 2 },
+  { kind: "barrel", cx: 8, cy: 41 },
+  { kind: "crates", cx: 26, cy: 44 },
+  { kind: "barrel", cx: 23, cy: 44 }
 ];
 
-export type ItemKind = "fuse" | "battery" | "bottles" | "note" | "panel" | "hatch";
+export type ItemKind = "fuse" | "battery" | "bottles" | "note" | "panel" | "hatch" | "console";
 
 export interface ItemDef {
   id: string;
@@ -121,7 +136,18 @@ export const ITEMS: ItemDef[] = [
   { id: "bot_office", kind: "bottles", cx: 9, cy: 19, label: "glass bottles" },
   { id: "bot_plat", kind: "bottles", cx: 34, cy: 28, label: "glass bottles" },
   { id: "panel", kind: "panel", cx: 43, cy: 4, label: "breaker rack" },
-  { id: "hatch", kind: "hatch", cx: 3, cy: 2, label: "surface hatch" }
+  { id: "hatch", kind: "hatch", cx: 3, cy: 2, label: "surface hatch" },
+  // --- Act III sub-level ---
+  { id: "console", kind: "console", cx: 15, cy: 45, label: "repeater core" },
+  { id: "bat_sub", kind: "battery", cx: 25, cy: 43, label: "torch battery" },
+  {
+    id: "note_intake", kind: "note", cx: 9, cy: 36, label: "intake ledger",
+    noteTitle: "Intake ledger — last entries",
+    noteBody:
+      "The ledger lists every name sent down to fix Repeater 4. The handwriting changes a dozen times. The dates do not stop.\n\n" +
+      "Each line ends the same way, in a different hand: did not return.\n\n" +
+      "The final entry is yours. Someone has already filled in the last column."
+  }
 ];
 
 export interface LightDef {
@@ -146,13 +172,20 @@ export const LIGHT_DEFS: LightDef[] = [
   { id: "l_corr_b", cx: 17, cy: 3, color: 0xff3a22, intensity: 0, off: true },
   { id: "l_corr_c", cx: 25, cy: 3, color: 0xff3a22, intensity: 0, off: true },
   { id: "l_corr_d", cx: 33, cy: 3, color: 0xff3a22, intensity: 0, off: true },
-  { id: "l_shaft", cx: 3, cy: 3, color: 0x4dff7a, intensity: 5 }
+  { id: "l_shaft", cx: 3, cy: 3, color: 0x4dff7a, intensity: 5 },
+  // sub-level (its own failing lights)
+  { id: "l_sub_a", cx: 13, cy: 38, color: 0x9fb0c4, intensity: 6, flicker: true },
+  { id: "l_sub_b", cx: 23, cy: 38, color: 0x8a9ab0, intensity: 4, flicker: true },
+  { id: "l_core", cx: 15, cy: 44, color: 0xffba66, intensity: 7 },
+  { id: "l_pump", cx: 24, cy: 43, color: 0x7f9080, intensity: 4, flicker: true }
 ];
 
 export const WAYPOINTS: Array<[number, number]> = [
   [38, 15], [38, 29], [43, 20], [34, 16], [40, 10],
   [13, 13], [26, 13], [13, 21], [26, 21], [19, 18],
-  [6, 17], [9, 19], [19, 8], [10, 3], [30, 3], [40, 5]
+  [6, 17], [9, 19], [19, 8], [10, 3], [30, 3], [40, 5],
+  // sub-level
+  [12, 38], [24, 38], [15, 44], [24, 43], [19, 33]
 ];
 
 export interface SignDef { text: string; cx: number; cy: number; face: "n" | "s" | "e" | "w"; color?: string }
@@ -168,7 +201,12 @@ export const SIGNS: SignDef[] = [
   { text: "<  EXIT", cx: 28, cy: 4, face: "n", color: "#56d877" },
   { text: "EXIT", cx: 3, cy: 1, face: "s", color: "#56d877" },
   { text: "PLATFORM 2", cx: 45, cy: 22, face: "w" },
-  { text: "DO NOT ENTER", cx: 45, cy: 18, face: "w", color: "#b0543c" }
+  { text: "DO NOT ENTER", cx: 45, cy: 18, face: "w", color: "#b0543c" },
+  // sub-level signage
+  { text: "SUB-LEVEL 2", cx: 19, cy: 30, face: "s", color: "#b0543c" },
+  { text: "INTAKE", cx: 8, cy: 35, face: "s" },
+  { text: "REPEATER CORE", cx: 15, cy: 41, face: "s", color: "#7da0c0" },
+  { text: "NO EXIT", cx: 26, cy: 41, face: "s", color: "#b0543c" }
 ];
 
 export const PLAYER_START = { cx: 19, cy: 29, yaw: 0 }; // facing north
@@ -182,5 +220,7 @@ export const ZONES: ZoneDef[] = [
   { id: "platform", x: 33, y: 14, w: 12, h: 17 },
   { id: "genRoom", x: 37, y: 2, w: 7, h: 6 },
   { id: "northCorr", x: 6, y: 3, w: 30, h: 1 },
-  { id: "shaft", x: 2, y: 2, w: 3, h: 3 }
+  { id: "shaft", x: 2, y: 2, w: 3, h: 3 },
+  { id: "subHall", x: 7, y: 35, w: 22, h: 7 },
+  { id: "core", x: 11, y: 42, w: 9, h: 5 }
 ];

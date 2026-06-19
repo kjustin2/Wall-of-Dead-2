@@ -5,6 +5,7 @@ import {
   type ItemDef, type LightDef
 } from "./data";
 import type { Level, Door } from "./Level";
+import type { Assets } from "../core/Assets";
 
 export interface LightHandle {
   def: LightDef;
@@ -38,7 +39,12 @@ export interface BuiltWorld {
   doorHandles: Map<string, DoorHandle>;
   items: Map<string, ItemHandle>;
   panelLed: THREE.MeshStandardMaterial;
+  /** the repeater-core screen material — Director turns it green on broadcast */
+  coreScreen: THREE.MeshStandardMaterial;
   exitSigns: THREE.MeshStandardMaterial[];
+  /** prop slots (positioned groups holding primitives) so GLB models can be
+   *  swapped in once they finish loading; see main.ts */
+  props: Array<{ group: THREE.Group; kind: string }>;
 }
 
 // deterministic rng for clutter
@@ -48,35 +54,6 @@ function lcg(seed: number): () => number {
     s = (s * 1664525 + 1013904223) >>> 0;
     return s / 0xffffffff;
   };
-}
-
-function makeConcreteTexture(base: string, speck: string, streaks: number): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = c.height = 256;
-  const g = c.getContext("2d")!;
-  g.fillStyle = base;
-  g.fillRect(0, 0, 256, 256);
-  const rnd = lcg(1234 + streaks);
-  for (let i = 0; i < 9000; i++) {
-    const v = rnd();
-    g.fillStyle = v < 0.5 ? "rgba(0,0,0,0.07)" : speck;
-    g.fillRect(rnd() * 256, rnd() * 256, 1 + rnd() * 2, 1 + rnd() * 2);
-  }
-  for (let i = 0; i < streaks; i++) {
-    const x = rnd() * 256;
-    const w = 4 + rnd() * 26;
-    const grad = g.createLinearGradient(x, 0, x + w, 0);
-    grad.addColorStop(0, "rgba(0,0,0,0)");
-    grad.addColorStop(0.5, `rgba(0,0,0,${0.05 + rnd() * 0.12})`);
-    grad.addColorStop(1, "rgba(0,0,0,0)");
-    g.fillStyle = grad;
-    g.fillRect(x, rnd() * 100, w, 156 + rnd() * 100);
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
-  return t;
 }
 
 function makeSignTexture(text: string, color: string): THREE.CanvasTexture {
@@ -101,19 +78,13 @@ function makeSignTexture(text: string, color: string): THREE.CanvasTexture {
 const FACE_ROT: Record<string, number> = { s: 0, n: Math.PI, e: Math.PI / 2, w: -Math.PI / 2 };
 const FACE_OFF: Record<string, [number, number]> = { s: [0, 1.01], n: [0, -1.01], e: [1.01, 0], w: [-1.01, 0] };
 
-export function buildWorld(level: Level): BuiltWorld {
+export function buildWorld(level: Level, assets: Assets): BuiltWorld {
   const group = new THREE.Group();
   const rnd = lcg(777);
 
-  const concrete = makeConcreteTexture("#5a564f", "rgba(255,255,255,0.05)", 14);
-  const floorTex = makeConcreteTexture("#3a3835", "rgba(255,255,255,0.04)", 26);
-  floorTex.repeat.set(GRID_W, GRID_H);
-  const ceilTex = makeConcreteTexture("#2e2c29", "rgba(255,255,255,0.03)", 8);
-  ceilTex.repeat.set(GRID_W / 2, GRID_H / 2);
-
-  const wallMat = new THREE.MeshStandardMaterial({ map: concrete, color: 0x9a948a, roughness: 0.95 });
-  const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, color: 0x8d8a84, roughness: 0.96 });
-  const ceilMat = new THREE.MeshStandardMaterial({ map: ceilTex, color: 0x777470, roughness: 1 });
+  const wallMat = assets.material("wall");
+  const floorMat = assets.material("floor");
+  const ceilMat = assets.material("ceiling");
 
   // floor + ceiling
   const W = GRID_W * CELL;
@@ -156,8 +127,8 @@ export function buildWorld(level: Level): BuiltWorld {
   group.add(wallsMesh);
   wallGeos.forEach((g) => g.dispose());
 
-  // pillars
-  const pillarMat = new THREE.MeshStandardMaterial({ map: concrete, color: 0x847e74, roughness: 0.92 });
+  // pillars (reuse the wall concrete)
+  const pillarMat = assets.material("wall");
   const pillarGeo = new THREE.BoxGeometry(0.85, WALL_H, 0.85);
   for (const [cx, cy] of PILLARS) {
     const [x, z] = level.cellCenter(cx, cy);
@@ -168,11 +139,12 @@ export function buildWorld(level: Level): BuiltWorld {
     group.add(m);
   }
 
-  // props
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3b2c, roughness: 0.9 });
-  const woodDark = new THREE.MeshStandardMaterial({ color: 0x352a1f, roughness: 0.9 });
-  const metal = new THREE.MeshStandardMaterial({ color: 0x3c4044, roughness: 0.6, metalness: 0.5 });
-  const rust = new THREE.MeshStandardMaterial({ color: 0x59392a, roughness: 0.85, metalness: 0.25 });
+  // props (real CC0 PBR materials)
+  const wood = assets.material("wood");
+  const woodDark = assets.material("wood");
+  const metal = assets.material("metal");
+  const rust = assets.material("rust");
+  const props: Array<{ group: THREE.Group; kind: string }> = [];
   for (const p of PROPS) {
     const [x, z] = level.cellCenter(p.cx, p.cy);
     const g = new THREE.Group();
@@ -210,10 +182,11 @@ export function buildWorld(level: Level): BuiltWorld {
       m.receiveShadow = true;
     });
     group.add(g);
+    props.push({ group: g, kind: p.kind });
   }
 
   // ceiling pipes along the service routes
-  const pipeMat = new THREE.MeshStandardMaterial({ color: 0x2a2d2f, roughness: 0.7, metalness: 0.45 });
+  const pipeMat = assets.material("metal");
   const pipeRuns: Array<[number, number, number, number, number, number]> = [
     // x1, z1, x2, z2, y, radius
     [12, 6.55, 72, 6.55, 2.72, 0.055],
@@ -282,8 +255,9 @@ export function buildWorld(level: Level): BuiltWorld {
 
   // doors
   const doorHandles = new Map<string, DoorHandle>();
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2c2e30, roughness: 0.7, metalness: 0.4 });
-  const doorMat = new THREE.MeshStandardMaterial({ color: 0x4d4438, roughness: 0.8 });
+  const frameMat = assets.material("metal");
+  const doorMat = assets.material("wood");
+  // fire doors keep a custom red so they stay readable as the choke-point doors
   const fireMat = new THREE.MeshStandardMaterial({ color: 0x5e2e20, roughness: 0.65, metalness: 0.35 });
   for (const door of level.doors) {
     const [x, z] = level.cellCenter(door.cx, door.cy);
@@ -371,6 +345,7 @@ export function buildWorld(level: Level): BuiltWorld {
   // items
   const items = new Map<string, ItemHandle>();
   let panelLed = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.4 });
+  let coreScreen = new THREE.MeshStandardMaterial({ color: 0x111416, emissive: 0x882017, emissiveIntensity: 0.9 });
   for (const it of ITEMS) {
     const [x, z] = level.cellCenter(it.cx, it.cy);
     const obj = new THREE.Group();
@@ -427,11 +402,24 @@ export function buildWorld(level: Level): BuiltWorld {
       plate.position.set(0, 1.25, -1.0);
       obj.add(plate, ring);
       baseY = 0;
+    } else if (it.kind === "console") {
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.0, 0.7), metal);
+      cab.position.y = 0.5;
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.95), metal);
+      deck.position.y = 1.02;
+      deck.rotation.x = -0.12;
+      // the screen: dead red until the signal is restored (Director swaps it green)
+      coreScreen = new THREE.MeshStandardMaterial({ color: 0x111416, emissive: 0x882017, emissiveIntensity: 0.9 });
+      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.46, 0.04), coreScreen);
+      screen.position.set(0, 1.5, -0.28);
+      screen.rotation.x = -0.3;
+      obj.add(cab, deck, screen);
+      baseY = 0;
     }
     obj.position.set(x, baseY, z);
     group.add(obj);
     items.set(it.id, { def: it, obj, baseY, taken: false });
   }
 
-  return { group, lights, doorHandles, items, panelLed, exitSigns };
+  return { group, lights, doorHandles, items, panelLed, coreScreen, exitSigns, props };
 }

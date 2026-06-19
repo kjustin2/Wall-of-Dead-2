@@ -35,7 +35,9 @@ const spots = [
   { name: "platform-stalker", cx: 38, cy: 22, yaw: -2.45, torch: true },
   { name: "platform-north", cx: 38, cy: 19, yaw: 0, torch: false },
   { name: "genroom", cx: 39, cy: 4, yaw: -1.57, torch: true },
-  { name: "corridor", cx: 30, cy: 3, yaw: 1.57, torch: true }
+  { name: "corridor", cx: 30, cy: 3, yaw: 1.57, torch: true },
+  { name: "subhall", cx: 18, cy: 38, yaw: 1.57, torch: true },
+  { name: "core", cx: 15, cy: 43, yaw: 3.14, torch: true }
 ];
 
 for (const s of spots) {

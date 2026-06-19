@@ -1,6 +1,6 @@
 # DEAD AIR
 
-A first-person stealth-horror vertical slice, built with **Three.js + Vite + TypeScript**. No guns, no score — your flashlight is both your lifeline and the thing that gets you killed.
+A first-person stealth-horror short, built with **Three.js + Vite + TypeScript**. No guns, no score — your flashlight is both your lifeline and the thing that gets you killed.
 
 > Repeater 4 went silent nine days ago, but the surface feed still loops the same
 > survivor count: 312. Two breaker fuses were pulled from the generator rack —
@@ -10,16 +10,33 @@ A first-person stealth-horror vertical slice, built with **Three.js + Vite + Typ
 
 ```powershell
 npm install
+npm run assets   # one-time: fetch the CC0 textures + models (see "Assets" below)
+```
+
+### Standalone desktop app (no browser)
+
+```powershell
+npm run standalone
+```
+
+Builds the game and launches it in its own **desktop window** (Electron) — no browser, no dev server to open by hand. Close the window to quit.
+
+### In a browser (dev server, with hot-reload)
+
+```powershell
 npm run dev
 ```
 
-Open the printed URL (default `http://localhost:5173`), click **DESCEND**. Headphones strongly recommended — every sound is procedural WebAudio and the audio *is* the threat-detection UI.
+Open the printed URL (default `http://localhost:5173`).
 
-## The loop
+Either way: click **DESCEND**. Headphones strongly recommended — every sound is procedural WebAudio and the audio *is* the threat-detection UI. Graphics auto-tune for your machine; override the tier any time from the pause menu (**Esc → GRAPHICS**).
 
-1. Explore the dark substation and find **two breaker fuses**.
-2. Refit them at the generator rack to restore power and restart the broadcast.
-3. Survive the escape: sprint the emergency corridor and **slam the fire doors behind you** — each one buys seconds while it bashes through.
+## The story (≈4 acts)
+
+1. **Arrival.** You came down the access shaft; the lift and the surface hatch are dead until the grid is live.
+2. **The station.** Explore the dark substation and find **two breaker fuses**; refit them at the generator rack to bring the grid up.
+3. **The truth, below.** Power unlocks the **service stair**. The broadcast was never coming from the surface — it comes from a sub-level the station was built to hide. Find what's down there, and restore the signal at the **repeater core**.
+4. **Get out.** The signal goes back out, the way up unlocks, and it stops pretending to be far away. Run all the way back to the surface hatch — **slam the fire doors behind you**.
 
 ## What hunts you
 
@@ -44,7 +61,22 @@ When its eyes catch the light, it is looking at you.
 | Torch | F |
 | Interact / read | E |
 | Throw bottle | Q |
-| Pause | Esc |
+| Pause / graphics | Esc |
+
+## Assets
+
+The look is driven by **CC0 (public-domain) assets**, fetched on demand and git-ignored:
+
+```powershell
+npm run assets            # download everything (idempotent)
+npm run assets -- --force # re-download
+```
+
+- PBR materials (concrete / metal / rust / wood / tile) from **ambientCG**.
+- Props (crate, drum, desk, bench) from **Poly Haven**.
+- The creature is a rigged humanoid (Mixamo "Xbot" via the three.js examples), redressed in-engine.
+
+Sources are listed in `CREDITS.md`. If the assets are absent the game still runs on flat-colour materials and the procedural primitive creature (so CI never depends on the download).
 
 ## Verify
 
@@ -53,24 +85,28 @@ npm run typecheck
 npm run build
 # with the dev server running in another terminal:
 npm run smoke      # boots the game headless, plays a few seconds, screenshots
-npm run test:e2e   # scripted full playthrough: fuses -> power -> chase -> win, plus death path
+npm run test:e2e   # scripted full playthrough: fuses -> power -> core -> chase -> escape, plus death path
 npm run tour       # screenshots key locations for visual review (scripts/shots/)
 ```
 
-The headless scripts use `puppeteer-core` driving the system Microsoft Edge — no browser download needed.
+The headless scripts drive the system Microsoft Edge via `puppeteer-core` (no browser download). They run at `?lowfx` by default — the full post-processing stack is too heavy for headless software GL; `?lowfx` still exercises the real composer, while `tour` runs at full quality for visuals.
 
 ## Architecture
 
 - `src/world/data.ts` — the whole level as data: carved room rects, doors, items, lights, signs, AI waypoints. 1 cell = 2 m.
-- `src/world/Level.ts` — grid model: collision, line-of-sight, BFS pathfinding, doors, noise events.
-- `src/world/Builder.ts` — builds the Three.js scene from data; all textures are canvas-generated, no asset files.
+- `src/world/Level.ts` — grid model: collision, line-of-sight, BFS pathfinding, doors, noise events (regenerates from `data.ts`).
+- `src/world/Builder.ts` — builds the Three.js scene from data, using the loaded PBR materials and GLB props.
+- `src/core/Assets.ts` — loads the CC0 PBR materials + GLB models; flat-colour / primitive fallbacks when absent.
+- `src/core/Post.ts` — post-processing: GTAO, bloom, depth-of-field, tone-mapping, AA, chromatic-aberration + vignette + cold film grade, grain. Quality tiers + auto-tune.
 - `src/game/Player.ts` — movement, stamina, crouch, head-bob, battery, footstep noise.
-- `src/game/Stalker.ts` — the creature: dormant / roam / investigate / search / chase, light-first perception, door bashing.
-- `src/game/Director.ts` — pacing: zone scares, objectives, the power-on sequence, the final chase, win/death.
+- `src/game/Stalker.ts` — the creature: dormant / roam / investigate / search / chase, light-first perception, door bashing; rigged GLB driven by the state machine.
+- `src/game/Director.ts` — pacing: act beats, zone scares, objectives, power-on, the core/broadcast, the final chase, win/death.
 - `src/core/AudioFX.ts` — 100% procedural WebAudio: drones, footsteps, heartbeat keyed to threat, door slams, the broadcast voice.
+- `scripts/fetch-assets.mjs` — reproducible CC0 asset download.
+- `electron/main.cjs` — standalone desktop launcher: serves the built `dist/` over localhost and opens it in an Electron window.
 
-## Design rules carried into this slice
+## Design rules
 
 - A light should feel useful and costly. Some threats are better escaped than killed — this one can't be killed at all.
 - Darkness creates tension but never makes interaction unreadable: pickups glint faintly, exit signage glows.
-- Narrative is short and unsettling: three notes, one broadcast, no cutscenes.
+- The story is told by the place — broadcasts, a wall of intake photographs, an operator's chair at a dead mic — more than by notes.

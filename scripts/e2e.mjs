@@ -5,7 +5,11 @@
 import puppeteer from "puppeteer-core";
 import { existsSync, mkdirSync } from "node:fs";
 
-const URL = process.argv[2] ?? "http://localhost:5199";
+// Default to ?lowfx: the full post stack (GTAO/SMAA) is too slow under headless
+// SwiftShader and stalls the game clock past these timeout-based assertions.
+// lowfx still drives the real composer so shader/runtime errors still surface.
+const base = process.argv[2] ?? "http://localhost:5199";
+const URL = base.includes("?") ? base : base + "?lowfx";
 const SHOTS = new globalThis.URL("./shots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 mkdirSync(SHOTS, { recursive: true });
 
@@ -50,10 +54,13 @@ await page.evaluate(() => {
   g.player.lightOn = true;
   g.player.battery = 1;
 });
-await sleep(200);
-
-const promptShown = await page.evaluate(() => document.getElementById("prompt").textContent || "");
-check("note: read prompt offered when aimed at note", /read/i.test(promptShown));
+// poll (like every other check here) rather than snapshot a fixed 200ms later —
+// the prompt only updates on a played frame, which is racy under slow headless GL
+const promptShown = await page
+  .waitForFunction(() => /read/i.test(document.getElementById("prompt").textContent || ""), { timeout: 5000, polling: 100 })
+  .then(() => true)
+  .catch(() => false);
+check("note: read prompt offered when aimed at note", promptShown);
 
 await page.keyboard.press("KeyE");
 const noteOpened = await page
@@ -95,18 +102,23 @@ await sleep(1500);
 // world connectivity audit: every key route must be walkable
 const routes = await page.evaluate(() => {
   const L = window.__game.level;
-  const P = (a, b) => {
-    const path = L.findPath(a[0], a[1], b[0], b[1], true);
-    return path !== null;
-  };
-  return {
+  const P = (a, b) => L.findPath(a[0], a[1], b[0], b[1], true) !== null;
+  const out = {
     startToFuseA: P([19, 29], [4, 15]),
     startToFuseB: P([19, 29], [43, 29]),
     startToPanel: P([19, 29], [43, 4]),
     panelToHatch: P([43, 4], [3, 2]),
+    subStairToCore: P([19, 32], [15, 45]), // Act III sub-level is internally walkable
     concourseToCorridorBlockedPrePower: !L.findPath(19, 18, 19, 8, false) ||
       L.findPath(19, 18, 19, 8, false).length > 25 // locked d_north must not be the shortcut
   };
+  // with the gated doors released, the full escape from the core must connect
+  L.door("d_service").locked = false;
+  L.door("d_north").locked = false;
+  out.coreToHatchEscape = P([15, 45], [3, 2]);
+  L.door("d_service").locked = true; // restore so the run still exercises the gating
+  L.door("d_north").locked = true;
+  return out;
 });
 for (const [k, v] of Object.entries(routes)) check(`route: ${k}`, v);
 
@@ -124,29 +136,50 @@ r = await page.evaluate(() => {
 });
 check("fuse B picked", r.fuses === 2);
 
+// refit the fuses at the panel -> power comes up, the service stair unlocks,
+// but the broadcast is dead and there is NO chase yet
 await page.evaluate(() => {
   const g = window.__game;
-  // stand at the panel like a real player would
   g.player.x = 43 * 2 + 1;
   g.player.z = 4 * 2 + 1;
   g.director.interact({ type: "item", id: "panel" });
 });
+// powerOn unlocks the service stair in a ~0.9s delayed beat — poll for it
+const serviceUnlocked = await page
+  .waitForFunction(() => !window.__game.level.door("d_service").locked, { timeout: 20000, polling: 100 })
+  .then(() => true)
+  .catch(() => false);
+r = await page.evaluate(() => {
+  const g = window.__game;
+  return { power: g.director.power, chase: g.director.chase, broadcast: g.director.broadcast };
+});
+check("power restored at panel", r.power);
+check("service stair unlocked by power", serviceUnlocked);
+check("no chase / broadcast yet (must go to the core)", r.chase === false && r.broadcast === false);
+
+// descend to the repeater core and restore the broadcast -> chase + escape unlock
+await page.evaluate(() => {
+  const g = window.__game;
+  g.player.x = 15 * 2 + 1;
+  g.player.z = 45 * 2 + 1;
+  g.director.interact({ type: "item", id: "console" });
+});
 // game time can run slower than wall time in headless; poll
 const chaseOk = await page
-  .waitForFunction(() => window.__game.director.chase && window.__game.stalker.finalChase, { timeout: 40000 })
+  .waitForFunction(() => window.__game.director.chase && window.__game.stalker.finalChase, { timeout: 40000, polling: 100 })
   .then(() => true)
   .catch(() => false);
 r = await page.evaluate(() => {
   const g = window.__game;
   return {
-    power: g.director.power,
+    broadcast: g.director.broadcast,
     northUnlocked: !g.level.door("d_north").locked,
     corridorLit: g.world.lights.get("l_corr_a").on
   };
 });
-check("power restored", r.power);
+check("broadcast restored at core", r.broadcast);
 check("final chase started", chaseOk);
-check("emergency route unlocked + lit", r.northUnlocked && r.corridorLit);
+check("escape route unlocked + lit", r.northUnlocked && r.corridorLit);
 await page.screenshot({ path: `${SHOTS}/e2e-chase.png` });
 
 // slam a fire door in its face and confirm it breaks through

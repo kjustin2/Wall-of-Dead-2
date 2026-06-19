@@ -3,3 +3,7 @@ dist/
 *.local
 .DS_Store
 scripts/shots/
+
+# downloaded CC0 assets (reproducible via `npm run assets`)
+public/textures/
+public/models/

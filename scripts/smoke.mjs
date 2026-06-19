@@ -6,7 +6,11 @@
 import puppeteer from "puppeteer-core";
 import { mkdirSync, existsSync } from "node:fs";
 
-const URL = process.argv[2] ?? "http://localhost:5173";
+// Default to ?lowfx: the full post stack (GTAO/SMAA) is too slow under headless
+// SwiftShader and stalls the game clock. lowfx still drives the real composer
+// (RenderPass→bloom→output→FXAA→grade→film) so shader/runtime errors surface.
+const base = process.argv[2] ?? "http://localhost:5173";
+const URL = base.includes("?") ? base : base + "?lowfx";
 const SHOTS = new globalThis.URL("./shots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 mkdirSync(SHOTS, { recursive: true });
 

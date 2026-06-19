@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { Level, Door } from "../world/Level";
 import type { AudioFX } from "../core/AudioFX";
 import type { Player } from "./Player";
@@ -10,6 +11,10 @@ const ROAM_SPEED = 1.35;
 const INVESTIGATE_SPEED = 2.3;
 const CHASE_SPEED = 4.45;
 const FINAL_CHASE_SPEED = 4.75;
+
+// the rigged creature mannequin (Xbot) — scaled gaunt-and-too-tall, head ~2.2m
+// to land the kill-cam framing (main.ts looks toward y=2.2)
+const RIG_SCALE = 1.3;
 
 export class Stalker {
   group = new THREE.Group();
@@ -45,6 +50,8 @@ export class Stalker {
   private head!: THREE.Mesh;
   private eyeMatL!: THREE.MeshBasicMaterial;
   private eyeMatR!: THREE.MeshBasicMaterial;
+  private eyeL!: THREE.Mesh;
+  private eyeR!: THREE.Mesh;
   private armL!: THREE.Mesh;
   private armR!: THREE.Mesh;
   private legL!: THREE.Mesh;
@@ -54,6 +61,11 @@ export class Stalker {
   private twitch = 0;
   private vocalT = 6;
   private dragT = 0;
+
+  // rigged-creature path (replaces the primitive once the GLB loads)
+  private mixer: THREE.AnimationMixer | null = null;
+  private actions = new Map<string, THREE.AnimationAction>();
+  private current: THREE.AnimationAction | null = null;
 
   onKill: (() => void) | null = null;
   onBash: (() => void) | null = null;
@@ -83,13 +95,18 @@ export class Stalker {
     this.head.position.y = 2.28;
     this.head.scale.set(0.78, 1.35, 0.85);
 
-    const eyeGeo = new THREE.SphereGeometry(0.02, 6, 6);
+    // eyes live on the group (not the body) so they survive the rig swap;
+    // the rigged head is featureless, so these glowing points carry the menace
+    const eyeGeo = new THREE.SphereGeometry(0.04, 8, 8);
     this.eyeMatL = new THREE.MeshBasicMaterial({ color: 0xd8e2ea, transparent: true, opacity: 0 });
     this.eyeMatR = new THREE.MeshBasicMaterial({ color: 0xd8e2ea, transparent: true, opacity: 0 });
     const eyeL = new THREE.Mesh(eyeGeo, this.eyeMatL);
-    eyeL.position.set(-0.045, 2.31, -0.105);
+    eyeL.position.set(-0.05, 2.31, -0.11);
     const eyeR = new THREE.Mesh(eyeGeo, this.eyeMatR);
-    eyeR.position.set(0.045, 2.31, -0.105);
+    eyeR.position.set(0.05, 2.31, -0.11);
+    this.eyeL = eyeL;
+    this.eyeR = eyeR;
+    this.group.add(eyeL, eyeR);
 
     // arms hang to the shins
     const armGeo = new THREE.CylinderGeometry(0.04, 0.022, 1.45, 6);
@@ -113,11 +130,72 @@ export class Stalker {
     this.legR = new THREE.Mesh(legGeo.clone(), skin);
     this.legR.position.set(0.1, 0.98, 0);
 
-    this.body.add(torso, chest, shoulders, this.head, eyeL, eyeR, this.armL, this.armR, this.legL, this.legR);
+    this.body.add(torso, chest, shoulders, this.head, this.armL, this.armR, this.legL, this.legR);
     this.body.traverse((m) => {
       m.castShadow = true;
     });
     this.group.add(this.body);
+
+    // upgrade to the rigged GLB creature when it's available (kept primitive otherwise)
+    this.loadRig();
+  }
+
+  private loadRig(): void {
+    new GLTFLoader().loadAsync("/models/creature/creature.glb").then(
+      (gltf) => this.attachRig(gltf.scene, gltf.animations),
+      () => { /* no creature asset — keep the procedural primitive */ }
+    );
+  }
+
+  private attachRig(scene: THREE.Object3D, clips: THREE.AnimationClip[]): void {
+    // redress the grey mannequin as the gaunt thing in the dark
+    const skin = new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.82, metalness: 0 });
+    scene.traverse((o) => {
+      if (o instanceof THREE.Mesh || o instanceof THREE.SkinnedMesh) {
+        o.material = skin;
+        o.castShadow = true;
+        o.frustumCulled = false; // skinned bounds can cull wrongly at this scale
+      }
+    });
+    // Mixamo models face +Z; the existing convention rotates the group by
+    // facing+PI for a -Z-facing model, so flip the rig to face -Z locally.
+    const inner = new THREE.Group();
+    inner.rotation.y = Math.PI;
+    inner.scale.setScalar(RIG_SCALE);
+    inner.add(scene);
+    this.group.remove(this.body);
+    this.group.add(inner);
+
+    this.mixer = new THREE.AnimationMixer(scene);
+    for (const name of ["idle", "walk", "run"]) {
+      const clip = THREE.AnimationClip.findByName(clips, name);
+      if (clip) this.actions.set(name, this.mixer.clipAction(clip));
+    }
+    this.current = this.actions.get("idle") ?? null;
+    this.current?.play();
+
+    // raise the glowing eyes to the rig's head height
+    this.eyeL.position.y = this.eyeR.position.y = 2.18;
+  }
+
+  private playAction(name: string, timeScale: number): void {
+    const next = this.actions.get(name);
+    if (!next) return;
+    next.timeScale = timeScale;
+    if (next === this.current) return;
+    next.reset().fadeIn(0.25).play();
+    this.current?.fadeOut(0.25);
+    this.current = next;
+  }
+
+  /** drive the rigged creature's animation from the AI state (mesh-only). */
+  private syncAnim(dt: number, speed: number): void {
+    this.mixer!.update(dt);
+    if (this.state === "chase") this.playAction("run", Math.min(1.5, Math.max(0.8, speed / 4)));
+    else if (speed > 0.1) this.playAction("walk", Math.min(1.8, Math.max(0.7, speed / 1.3)));
+    else this.playAction("idle", 1);
+    this.group.position.set(this.x, 0, this.z);
+    this.group.rotation.y = this.facing + Math.PI;
   }
 
   setPos(x: number, z: number): void {
@@ -391,33 +469,39 @@ export class Stalker {
     }
 
     // ---- animation ----
-    this.tAcc += dt;
-    this.animT += dt * (speed > 0.1 ? speed * 2.2 : 1);
-    const lurch = speed > 0.1 ? Math.sin(this.animT) : 0;
-    // dormant = kneeling: legs sink away, torso upright, head bowed
-    this.group.position.set(this.x, Math.abs(lurch) * 0.05 - this.crouchPose * 0.72, this.z);
-    this.group.rotation.y = this.facing + Math.PI; // model faces -z locally
-    this.body.rotation.z = lurch * 0.07;
-    this.body.rotation.x = 0.16 + this.crouchPose * 0.42 + (speed > 3 ? 0.2 : 0);
-    // arms reach forward while it closes in
-    const wantReach = this.state === "chase" && dToPlayer < 7 ? 1 : 0;
-    this.armReach += (wantReach - this.armReach) * Math.min(1, 4 * dt);
-    this.armL.rotation.x = lurch * 0.5 + 0.2 - this.armReach * 1.35;
-    this.armR.rotation.x = -lurch * 0.5 + 0.2 - this.armReach * 1.35;
-    this.legL.rotation.x = -lurch * 0.6;
-    this.legR.rotation.x = lurch * 0.6;
-    // head: slow wrong-angle tilt with sudden corrective twitches
-    this.twitchT -= dt;
-    if (this.twitchT <= 0) {
-      this.twitchT = 2.5 + Math.random() * 6;
-      this.twitch = (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.3);
+    if (this.mixer) {
+      // rigged creature: skeletal clips drive the body; AI math is unchanged
+      this.syncAnim(dt, speed);
+    } else {
+      // procedural primitive fallback (used until/unless the GLB loads)
+      this.tAcc += dt;
+      this.animT += dt * (speed > 0.1 ? speed * 2.2 : 1);
+      const lurch = speed > 0.1 ? Math.sin(this.animT) : 0;
+      // dormant = kneeling: legs sink away, torso upright, head bowed
+      this.group.position.set(this.x, Math.abs(lurch) * 0.05 - this.crouchPose * 0.72, this.z);
+      this.group.rotation.y = this.facing + Math.PI; // model faces -z locally
+      this.body.rotation.z = lurch * 0.07;
+      this.body.rotation.x = 0.16 + this.crouchPose * 0.42 + (speed > 3 ? 0.2 : 0);
+      // arms reach forward while it closes in
+      const wantReach = this.state === "chase" && dToPlayer < 7 ? 1 : 0;
+      this.armReach += (wantReach - this.armReach) * Math.min(1, 4 * dt);
+      this.armL.rotation.x = lurch * 0.5 + 0.2 - this.armReach * 1.35;
+      this.armR.rotation.x = -lurch * 0.5 + 0.2 - this.armReach * 1.35;
+      this.legL.rotation.x = -lurch * 0.6;
+      this.legR.rotation.x = lurch * 0.6;
+      // head: slow wrong-angle tilt with sudden corrective twitches
+      this.twitchT -= dt;
+      if (this.twitchT <= 0) {
+        this.twitchT = 2.5 + Math.random() * 6;
+        this.twitch = (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.3);
+      }
+      this.twitch *= Math.max(0, 1 - 7 * dt);
+      this.head.rotation.z = Math.sin(this.tAcc * 0.6) * 0.13 + this.twitch;
+      // looks ahead despite the hunch; bows over its knees while dormant
+      this.head.rotation.x = -this.body.rotation.x * 0.7 + this.crouchPose * 0.7;
     }
-    this.twitch *= Math.max(0, 1 - 7 * dt);
-    this.head.rotation.z = Math.sin(this.tAcc * 0.6) * 0.13 + this.twitch;
-    // looks ahead despite the hunch; bows over its knees while dormant
-    this.head.rotation.x = -this.body.rotation.x * 0.7 + this.crouchPose * 0.7;
 
-    // eyes glint only when facing the player
+    // eyes glint only when facing the player (both paths)
     const toP = Math.atan2(px - this.x, pz - this.z);
     let fdiff = Math.abs(toP - this.facing) % (Math.PI * 2);
     if (fdiff > Math.PI) fdiff = Math.PI * 2 - fdiff;

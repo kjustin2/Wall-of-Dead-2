@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { Input } from "./core/Input";
 import { AudioFX } from "./core/AudioFX";
+import { Post } from "./core/Post";
+import { Assets } from "./core/Assets";
 import { Level } from "./world/Level";
 import { buildWorld } from "./world/Builder";
 import { PLAYER_START, STALKER_START, ITEMS } from "./world/data";
@@ -21,6 +23,8 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.35;
 app.appendChild(renderer.domElement);
 
+const assets = new Assets(renderer);
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x020304);
 scene.fog = new THREE.FogExp2(0x04050a, 0.044);
@@ -29,16 +33,37 @@ scene.add(new THREE.HemisphereLight(0x232c3e, 0x07080c, 1.15));
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.08, 90);
 camera.rotation.order = "YXZ";
 
+const post = new Post(renderer, scene, camera);
+
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  post.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ---------- world ----------
 const level = new Level();
-const world = buildWorld(level);
+const world = buildWorld(level, assets);
 scene.add(world.group);
+
+// stream the CC0 PBR maps onto the world's materials; world is usable immediately
+const loadNote = document.getElementById("loadnote");
+assets
+  .load((frac) => {
+    if (loadNote) loadNote.textContent = `loading textures ${Math.round(frac * 100)}%`;
+  })
+  .then(() => {
+    loadNote?.classList.add("hidden");
+    // swap primitive props for the loaded CC0 GLB models (kept primitive if absent)
+    for (const p of world.props) {
+      const m = assets.model(p.kind);
+      if (m) {
+        p.group.clear();
+        p.group.add(m);
+      }
+    }
+  });
 
 const input = new Input(renderer.domElement);
 const fx = new AudioFX();
@@ -273,7 +298,7 @@ function updateLights(dt: number, t: number): void {
 
 function updateItems(t: number): void {
   for (const h of world.items.values()) {
-    if (h.taken || h.def.kind === "panel" || h.def.kind === "hatch") continue;
+    if (h.taken || h.def.kind === "panel" || h.def.kind === "hatch" || h.def.kind === "console") continue;
     h.obj.position.y = h.baseY + Math.sin(t * 1.8 + h.baseY * 13 + h.def.cx) * 0.04;
     if (h.def.kind !== "note") h.obj.rotation.y = t * 0.8;
   }
@@ -301,6 +326,19 @@ for (const id of ["btn-retry", "btn-again"]) {
   document.getElementById(id)!.addEventListener("click", () => location.reload());
 }
 
+// graphics quality selector (pause menu) — manual override of the auto-tune
+const qOpts = Array.from(document.querySelectorAll<HTMLElement>("#quality .q-opt"));
+function refreshQuality(): void {
+  const q = post.getQuality();
+  for (const el of qOpts) el.classList.toggle("active", el.dataset.q === q);
+}
+for (const el of qOpts) {
+  el.addEventListener("click", () => {
+    post.lockQuality(el.dataset.q as "low" | "medium" | "high");
+    refreshQuality();
+  });
+}
+
 document.addEventListener("pointerlockchange", () => {
   if (state === "playing" && !input.locked) {
     // lock lost (Esc / alt-tab): dismiss any open note so resuming drops you
@@ -309,6 +347,7 @@ document.addEventListener("pointerlockchange", () => {
     player.frozen = director.over;
     state = "paused";
     input.enabled = false;
+    refreshQuality();
     hud.showScreen("pause");
   } else if (state === "paused" && input.locked) {
     state = "playing";
@@ -456,9 +495,14 @@ function frame(): void {
   updateItems(t);
   updateDust(dt, t);
 
-  renderer.render(scene, camera);
+  post.setMood(stalker.state === "chase" && !director.over, director.dying);
+  post.render(dt);
   input.flush();
 }
+
+// precompile scene + post shaders so the first played frame doesn't stutter
+renderer.compile(scene, camera);
+post.warmup();
 
 frame();
 
@@ -468,4 +512,4 @@ declare global {
     __game?: unknown;
   }
 }
-window.__game = { player, stalker, director, level, world, fx, hud, startGame };
+window.__game = { player, stalker, director, level, world, fx, hud, post, startGame };

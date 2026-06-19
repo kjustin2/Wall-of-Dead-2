@@ -17,26 +17,11 @@ export class Hud {
   private damageEl = el("damage");
   private chaseEl = el("chase-vignette");
   private blackoutEl = el("blackout");
-  private grain = el<HTMLCanvasElement>("grain");
   private subTimer = 0;
   noteOpen = false;
 
-  constructor() {
-    this.grain.width = 160;
-    this.grain.height = 90;
-    setInterval(() => this.drawGrain(), 80);
-  }
-
-  private drawGrain(): void {
-    const g = this.grain.getContext("2d")!;
-    const img = g.createImageData(160, 90);
-    for (let i = 0; i < img.data.length; i += 4) {
-      const v = (Math.random() * 255) | 0;
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-      img.data[i + 3] = 255;
-    }
-    g.putImageData(img, 0, 0);
-  }
+  // film grain + the atmospheric vignette now live in the post-processing
+  // pipeline (src/core/Post.ts); the dynamic event overlays below stay in DOM.
 
   show(): void {
     el("hud").classList.remove("hidden");

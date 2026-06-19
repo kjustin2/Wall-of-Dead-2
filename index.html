@@ -38,11 +38,9 @@
     </div>
   </div>
 
-  <!-- overlays -->
-  <div id="vignette"></div>
+  <!-- dynamic event overlays (static vignette + grain are in the post pipeline) -->
   <div id="chase-vignette"></div>
   <div id="damage"></div>
-  <canvas id="grain"></canvas>
   <div id="blackout"></div>
 
   <!-- screens -->
@@ -61,6 +59,7 @@
       </div>
       <p class="hint">It hunts light first, sound second. The torch is not your friend.</p>
       <button id="btn-start">DESCEND</button>
+      <p id="loadnote">loading textures…</p>
     </div>
   </div>
 
@@ -68,6 +67,12 @@
     <div class="screen-inner">
       <h2>PAUSED</h2>
       <button id="btn-resume">RESUME</button>
+      <div id="quality">
+        <span class="q-label">GRAPHICS</span>
+        <span class="q-opt" data-q="low">LOW</span>
+        <span class="q-opt" data-q="medium">MEDIUM</span>
+        <span class="q-opt" data-q="high">HIGH</span>
+      </div>
     </div>
   </div>
 

@@ -28,6 +28,8 @@ interface DelayedBeat {
 export class Director {
   fuses = 0;
   power = false;
+  /** true once the signal is restored at the core — gates the escape */
+  broadcast = false;
   chase = false;
   over = false;
   /** true from the instant of death until the death screen (drives the kill-cam) */
@@ -51,7 +53,13 @@ export class Director {
   ) {
     stalker.onKill = () => this.kill();
     hud.setObjective("Find the two missing breaker fuses  (0 / 2)");
-    this.after(1.2, () => this.hud.subtitle("Lower concourse. The air tastes like old pennies."));
+    // Act I — arrival: you came down, and the only way back up needs power
+    this.after(1.0, () => this.hud.subtitle("Lower concourse. The air tastes like old pennies.", 5));
+    this.after(6.0, () => this.hud.subtitle("You came down the access shaft an hour ago. The lift won't lift and the hatch won't open until the grid is live.", 6.5));
+    this.after(13.5, () => {
+      this.fx.radioVoice(4);
+      this.hud.subtitle("Overhead, the surface feed loops on a dead channel: '— survivors below: three hundred and twelve —'.", 6);
+    });
   }
 
   private after(t: number, fn: () => void): void {
@@ -160,7 +168,15 @@ export class Director {
         if (!this.power) this.hud.subtitle("Fire doors on magnetic holds, all wedged open. Someone wanted a clear run.");
         break;
       case "shaft":
-        if (!this.power) this.hud.subtitle("The surface hatch. Its lock is electric — dead grid, dead bolt.");
+        if (!this.broadcast) this.hud.subtitle("The surface hatch. Its lock is electric — dead grid, dead bolt.");
+        break;
+      case "subHall":
+        this.fx.whisper(this.player.x, this.player.z - 2);
+        this.hud.subtitle("Sub-level 2. The intake hall. Photographs cover the wall floor to ceiling — every face ever sent down here to fix something.", 6.5);
+        this.after(5, () => this.hud.subtitle("Beneath the last row, scratched deep into the plaster: THE COUNT STAYS AT 312 BECAUSE NOBODY LEAVES.", 6));
+        break;
+      case "core":
+        this.hud.subtitle("The repeater core. The operator's chair still faces the dead mic. The signal was never coming from the surface — it comes from down here.", 7);
         break;
     }
   }
@@ -183,7 +199,8 @@ export class Director {
       case "battery": return "take the battery";
       case "bottles": return "take the bottles";
       case "panel": return this.power ? null : this.fuses >= 2 ? "refit the fuses" : `breaker rack — ${this.fuses} / 2 fuses`;
-      case "hatch": return this.power ? "open the hatch — climb out" : "sealed — no power";
+      case "console": return this.broadcast ? null : this.power ? "restore the broadcast" : "dead — no power";
+      case "hatch": return this.broadcast ? "open the hatch — climb out" : this.power ? "sealed — restore the signal first" : "sealed — no power";
     }
   }
 
@@ -234,9 +251,18 @@ export class Director {
           this.powerOn();
         }
         break;
-      case "hatch":
+      case "console":
+        if (this.broadcast) break;
         if (!this.power) {
-          this.hud.subtitle("The hatch bolt is magnetic. No power, no release.");
+          this.hud.subtitle("The core is dark. The grid has to come up first.");
+          this.fx.uiClick();
+        } else {
+          this.restoreBroadcast();
+        }
+        break;
+      case "hatch":
+        if (!this.broadcast) {
+          this.hud.subtitle(this.power ? "The hatch won't release until the signal is live again." : "The hatch bolt is magnetic. No power, no release.");
           this.fx.uiClick();
         } else {
           this.win();
@@ -295,6 +321,8 @@ export class Director {
     this.level.addNoise(this.player.x, this.player.z, 40);
   }
 
+  // Act II -> III: the grid comes up, but the broadcast feed is dead. The core
+  // is below — power unlocks the service stair instead of the escape route.
   private powerOn(): void {
     this.power = true;
     this.fx.fuseClunk();
@@ -302,28 +330,52 @@ export class Director {
     this.after(0.9, () => {
       this.fx.powerOn();
       this.world.panelLed.emissive.setHex(0x22ff44);
-      // emergency circuit: corridor bathed red, gen room shifts red
+      const gen = this.world.lights.get("l_gen")!;
+      gen.light.color.setHex(0xffd28a);
+      gen.mat.emissive.setHex(0xffd28a);
+      // the sealed service stair releases now there's grid power
+      this.level.door("d_service").locked = false;
+      this.hud.setObjective("The broadcast is dead. Restore the signal at the repeater core — service stair below the stairwell.");
+    });
+    this.after(2.0, () => {
+      this.hud.subtitle("Power floods back — then the speakers cough static and go quiet. The feed isn't coming from up here. It never was.", 6.5);
+    });
+    this.after(3.0, () => {
+      // it stops pretending to be far away
+      this.fx.groanDistant();
+      this.stalker.activate();
+      this.stalker.alert = 2;
+    });
+  }
+
+  // Act III -> IV: restore the signal at the core. The thing comes, and the
+  // way out finally unlocks — now you run all the way back up.
+  private restoreBroadcast(): void {
+    if (this.broadcast) return;
+    this.broadcast = true;
+    this.fx.fuseClunk();
+    this.world.coreScreen.emissive.setHex(0x22ff44);
+    this.after(0.6, () => {
+      this.fx.powerOn();
+      // emergency circuit lights the way out: corridor red, station browns out
       for (const id of ["l_corr_a", "l_corr_b", "l_corr_c", "l_corr_d"]) {
         const lh = this.world.lights.get(id)!;
         lh.on = true;
         lh.base = 8;
         lh.pulse = true;
       }
-      const gen = this.world.lights.get("l_gen")!;
-      gen.light.color.setHex(0xff4030);
-      gen.mat.emissive.setHex(0xff4030);
       const conc = this.world.lights.get("l_conc_a")!;
-      conc.base = 4; // brownout elsewhere
+      conc.base = 4;
       this.level.door("d_north").locked = false;
-      this.hud.setObjective("GET OUT — west corridor to the surface hatch. Slam the doors behind you.");
+      this.hud.setObjective("GET OUT — back up to the surface hatch. Slam the doors behind you.");
     });
-    this.after(2.0, () => {
+    this.after(1.6, () => {
       this.fx.radioVoice(7);
       this.hud.subtitle("Every speaker at once: '— survivors below: three hundred and twelve —'. The dark answers it.", 6);
     });
-    this.after(3.4, () => {
-      // it comes through the access hall, hard
-      const [sx, sz] = this.level.cellCenter(40, 10);
+    this.after(2.8, () => {
+      // it cuts off the way back, hard
+      const [sx, sz] = this.level.cellCenter(12, 38);
       this.stalker.setPos(sx, sz);
       this.stalker.startFinalChase();
       this.chase = true;
