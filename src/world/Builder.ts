@@ -75,6 +75,62 @@ function makeSignTexture(text: string, color: string): THREE.CanvasTexture {
   return t;
 }
 
+/** a faded ID-photograph of someone who was sent down and did not return */
+function makePortraitTexture(seed: number): THREE.CanvasTexture {
+  const rnd = lcg(seed);
+  const c = document.createElement("canvas");
+  c.width = 96;
+  c.height = 128;
+  const g = c.getContext("2d")!;
+  // aged paper
+  const paper = 28 + rnd() * 26;
+  g.fillStyle = `rgb(${paper + 14},${paper + 8},${paper})`;
+  g.fillRect(0, 0, 96, 128);
+  // backdrop panel
+  g.fillStyle = `rgb(${18 + rnd() * 14},${20 + rnd() * 14},${24 + rnd() * 14})`;
+  g.fillRect(8, 8, 80, 112);
+  // shoulders
+  const skin = 120 + rnd() * 70;
+  g.fillStyle = `rgb(${skin * 0.6},${skin * 0.58},${skin * 0.56})`;
+  g.beginPath();
+  g.ellipse(48, 128, 34, 30, 0, Math.PI, 0, true);
+  g.fill();
+  // head
+  g.fillStyle = `rgb(${skin},${skin * 0.95},${skin * 0.9})`;
+  g.beginPath();
+  g.ellipse(48, 58 + rnd() * 6, 20 + rnd() * 4, 26 + rnd() * 4, 0, 0, Math.PI * 2);
+  g.fill();
+  // hollow eyes
+  g.fillStyle = "rgba(0,0,0,0.55)";
+  for (const dx of [-8, 8]) {
+    g.beginPath();
+    g.ellipse(48 + dx, 54, 3.5, 4.5, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  // grain + scratches
+  for (let i = 0; i < 240; i++) {
+    g.fillStyle = `rgba(0,0,0,${rnd() * 0.16})`;
+    g.fillRect(rnd() * 96, rnd() * 128, 1, 1);
+  }
+  g.strokeStyle = "rgba(0,0,0,0.4)";
+  g.lineWidth = 1;
+  for (let i = 0; i < 3; i++) {
+    g.beginPath();
+    g.moveTo(rnd() * 96, 0);
+    g.lineTo(rnd() * 96, 128);
+    g.stroke();
+  }
+  // vignette
+  const vg = g.createRadialGradient(48, 60, 20, 48, 64, 80);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(0,0,0,0.7)");
+  g.fillStyle = vg;
+  g.fillRect(0, 0, 96, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 const FACE_ROT: Record<string, number> = { s: 0, n: Math.PI, e: Math.PI / 2, w: -Math.PI / 2 };
 const FACE_OFF: Record<string, [number, number]> = { s: [0, 1.01], n: [0, -1.01], e: [1.01, 0], w: [-1.01, 0] };
 
@@ -185,16 +241,16 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
     props.push({ group: g, kind: p.kind });
   }
 
-  // ceiling pipes along the service routes
+  // ceiling pipes along the service routes (new hub-and-spoke layout)
   const pipeMat = assets.material("metal");
   const pipeRuns: Array<[number, number, number, number, number, number]> = [
     // x1, z1, x2, z2, y, radius
-    [12, 6.55, 72, 6.55, 2.72, 0.055],
-    [12, 7.3, 72, 7.3, 2.6, 0.035],
-    [81.3, 6, 81.3, 26, 2.7, 0.05],
-    [66.5, 30, 66.5, 60, 2.65, 0.05],
-    [25, 24.6, 55, 24.6, 2.55, 0.05],
-    [7, 28.5, 21, 28.5, 2.6, 0.04]
+    [37, 30, 69, 30, 2.72, 0.055],   // concourse, e-w
+    [37, 31, 69, 31, 2.6, 0.035],
+    [96, 23, 96, 53, 2.68, 0.05],    // platform, n-s
+    [9, 28, 24, 28, 2.6, 0.045],     // maintenance, e-w
+    [51, 49, 51, 66, 2.58, 0.045],   // service stair, n-s
+    [30, 73, 66, 73, 2.6, 0.05]      // intake archive, e-w
   ];
   for (const [x1, z1, x2, z2, y, r] of pipeRuns) {
     const len = Math.hypot(x2 - x1, z2 - z1);
@@ -221,9 +277,9 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
     s.scale.x = 0.6 + rnd();
     group.add(s);
   }
-  // the drag smear: from the platform's west door to where it sits
+  // the drag smear: from the platform's west door toward where it sits
   {
-    const x1 = 66, z1 = 37, x2 = 87, z2 = 58;
+    const x1 = 80, z1 = 37, x2 = 95, z2 = 51;
     const len = Math.hypot(x2 - x1, z2 - z1);
     const geo = new THREE.PlaneGeometry(0.55, len);
     geo.rotateX(-Math.PI / 2);
@@ -302,17 +358,61 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
     doorHandles.set(door.def.id, { door, pivot, swing });
   }
 
-  // ceiling lights
+  // lift cage at the shaft head — you rode it down; you ride it out
+  {
+    const cageMat = assets.material("metal");
+    const cage = new THREE.Group();
+    const cx = 53, cz = 10; // world centre of the shaft head
+    const hw = 3.6, hd = 3.0;
+    const postGeo = new THREE.BoxGeometry(0.12, WALL_H - 0.1, 0.12);
+    for (const [ox, oz] of [[-hw, -hd], [hw, -hd], [-hw, hd], [hw, hd]] as const) {
+      const p = new THREE.Mesh(postGeo, cageMat);
+      p.position.set(cx + ox, (WALL_H - 0.1) / 2, cz + oz);
+      p.castShadow = true;
+      cage.add(p);
+    }
+    // top rails
+    const railX = new THREE.BoxGeometry(hw * 2, 0.1, 0.1);
+    const railZ = new THREE.BoxGeometry(0.1, 0.1, hd * 2);
+    for (const oz of [-hd, hd]) {
+      const r = new THREE.Mesh(railX, cageMat);
+      r.position.set(cx, WALL_H - 0.12, cz + oz);
+      cage.add(r);
+    }
+    for (const ox of [-hw, hw]) {
+      const r = new THREE.Mesh(railZ, cageMat);
+      r.position.set(cx + ox, WALL_H - 0.12, cz);
+      cage.add(r);
+    }
+    // a few vertical guard bars on the north/side walls (mesh-cage feel)
+    const barGeo = new THREE.CylinderGeometry(0.02, 0.02, WALL_H - 0.2, 6);
+    for (let i = -2; i <= 2; i++) {
+      const b = new THREE.Mesh(barGeo, cageMat);
+      b.position.set(cx + i * 1.4, (WALL_H - 0.2) / 2, cz - hd);
+      cage.add(b);
+    }
+    cage.traverse((m) => { m.receiveShadow = true; });
+    group.add(cage);
+  }
+
+  // ceiling lights (recessed in a dark housing so they read as mounted fixtures)
   const lights = new Map<string, LightHandle>();
+  const housingMat = new THREE.MeshStandardMaterial({ color: 0x131419, roughness: 0.7, metalness: 0.3 });
+  const housingGeo = new THREE.BoxGeometry(1.06, 0.14, 0.38);
   for (const ld of LIGHT_DEFS) {
     const [x, z] = level.cellCenter(ld.cx, ld.cy);
+    const housing = new THREE.Mesh(housingGeo, housingMat);
+    housing.position.set(x, WALL_H - 0.05, z);
+    housing.castShadow = true;
+    housing.receiveShadow = true;
+    group.add(housing);
     const mat = new THREE.MeshStandardMaterial({
       color: 0x222222,
       emissive: new THREE.Color(ld.color),
       emissiveIntensity: ld.off ? 0 : 0.85
     });
     const fixture = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.09, 0.24), mat);
-    fixture.position.set(x, WALL_H - 0.06, z);
+    fixture.position.set(x, WALL_H - 0.12, z);
     group.add(fixture);
     const light = new THREE.PointLight(ld.color, ld.off ? 0 : ld.intensity, 20, 1.4);
     light.position.set(x, WALL_H - 0.35, z);
@@ -342,27 +442,68 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
     group.add(plane);
   }
 
-  // items
+  // the wall of faces — intake archive north wall (z ~= 70), the Act III reveal.
+  // Every face ever sent down to fix Repeater 4, floor to higher than a man can reach.
+  {
+    const faceRnd = lcg(9157);
+    const portraits = [0, 1, 2, 3, 4].map((i) => makePortraitTexture(1000 + i * 37));
+    const faceGeo = new THREE.PlaneGeometry(0.46, 0.61);
+    for (let yi = 0; yi < 4; yi++) {
+      for (let x = 30; x <= 66; x += 2.6) {
+        if (x > 50 && x < 56) continue;        // leave the service-stair doorway clear
+        if (faceRnd() < 0.12) continue;        // organic gaps
+        const tex = portraits[Math.floor(faceRnd() * portraits.length)];
+        const mat = new THREE.MeshStandardMaterial({
+          map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.07, roughness: 0.95
+        });
+        const m = new THREE.Mesh(faceGeo, mat);
+        m.position.set(
+          x + (faceRnd() - 0.5) * 0.5,
+          0.95 + yi * 0.55 + (faceRnd() - 0.5) * 0.12,
+          70.03
+        );
+        m.rotation.z = (faceRnd() - 0.5) * 0.16;
+        m.scale.setScalar(0.85 + faceRnd() * 0.4);
+        group.add(m);
+      }
+    }
+  }
+
+  // items — pickups rest on small supply crates so nothing floats in mid-air;
+  // the objective fixtures (panel/hatch/console) mount to the wall/floor.
   const items = new Map<string, ItemHandle>();
   let panelLed = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.4 });
   let coreScreen = new THREE.MeshStandardMaterial({ color: 0x111416, emissive: 0x882017, emissiveIntensity: 0.9 });
+  const PED_TOP = 0.4;
+  const pedGeo = new THREE.BoxGeometry(0.52, PED_TOP, 0.52);
+  const addPedestal = (px: number, pz: number): void => {
+    const ped = new THREE.Mesh(pedGeo, woodDark);
+    ped.position.set(px, PED_TOP / 2, pz);
+    ped.rotation.y = rnd() * Math.PI;
+    ped.castShadow = true;
+    ped.receiveShadow = true;
+    group.add(ped);
+  };
   for (const it of ITEMS) {
     const [x, z] = level.cellCenter(it.cx, it.cy);
     const obj = new THREE.Group();
-    let baseY = 0.55;
+    let baseY = 0;
     if (it.kind === "fuse") {
       const m = new THREE.Mesh(
         new THREE.BoxGeometry(0.14, 0.34, 0.14),
         new THREE.MeshStandardMaterial({ color: 0x553311, emissive: 0xcc5510, emissiveIntensity: 0.5 })
       );
       obj.add(m);
+      addPedestal(x, z);
+      baseY = PED_TOP + 0.17; // stood on the crate
     } else if (it.kind === "battery") {
       const m = new THREE.Mesh(
         new THREE.CylinderGeometry(0.07, 0.07, 0.22, 10),
         new THREE.MeshStandardMaterial({ color: 0x3a4416, emissive: 0x9aa830, emissiveIntensity: 0.45 })
       );
       obj.add(m);
-      baseY = 0.45;
+      addPedestal(x, z);
+      baseY = PED_TOP + 0.12;
     } else if (it.kind === "bottles") {
       const mat = new THREE.MeshStandardMaterial({
         color: 0x1d3a22, emissive: 0x2a5532, emissiveIntensity: 0.35, roughness: 0.2
@@ -372,7 +513,8 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
         b.position.set(i * 0.18 - 0.09, 0, 0);
         obj.add(b);
       }
-      baseY = 0.4;
+      addPedestal(x, z);
+      baseY = PED_TOP + 0.16;
     } else if (it.kind === "note") {
       const m = new THREE.Mesh(
         new THREE.PlaneGeometry(0.32, 0.42),
@@ -380,9 +522,11 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
           color: 0xb0a890, emissive: 0x665e48, emissiveIntensity: 0.3, side: THREE.DoubleSide
         })
       );
-      m.rotation.x = -Math.PI / 2 + 0.25;
+      m.rotation.x = -Math.PI / 2;        // laid flat, like dropped paper
+      m.rotation.z = (rnd() - 0.5) * 0.5; // slightly askew
       obj.add(m);
-      baseY = 0.5;
+      addPedestal(x, z);
+      baseY = PED_TOP + 0.015;
     } else if (it.kind === "panel") {
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.7, 1.3), metal);
       body.position.set(0.85, 1.3, 0); // against east wall
@@ -396,11 +540,32 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
       obj.add(body, led, slots);
       baseY = 0;
     } else if (it.kind === "hatch") {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.07, 8, 20), metal);
-      ring.position.set(0, 1.5, -0.92);
-      const plate = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.2, 0.12), rust);
-      plate.position.set(0, 1.25, -1.0);
-      obj.add(plate, ring);
+      // a sealed OVERHEAD escape bulkhead with a fixed ladder up to it — the manual
+      // way to the surface (the lift only came down). Reads as a real exit, grounded
+      // on the floor and set into the ceiling, not a door floating in mid-air.
+      const hazMat = new THREE.MeshStandardMaterial({ color: 0xb9a23a, roughness: 0.7, emissive: 0x161200, emissiveIntensity: 0.25 });
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.2, 1.62), metal);   // frame set into the ceiling
+      rim.position.set(0, WALL_H - 0.1, 0);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.14, 1.34), rust);  // heavy closed hatch
+      door.position.set(0, WALL_H - 0.05, 0);
+      const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.05, 8, 20), metal); // locking wheel below it
+      wheel.position.set(0, WALL_H - 0.5, 0);
+      wheel.rotation.x = Math.PI / 2;
+      const collar = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.64, 22), hazMat); // hazard collar on the floor
+      collar.rotation.x = -Math.PI / 2;
+      collar.position.y = 0.02;
+      obj.add(rim, door, wheel, collar);
+      const railGeo = new THREE.BoxGeometry(0.06, WALL_H - 0.2, 0.06);              // fixed ladder up to it
+      const railL = new THREE.Mesh(railGeo, metal); railL.position.set(-0.3, (WALL_H - 0.2) / 2, 0.5);
+      const railR = new THREE.Mesh(railGeo, metal); railR.position.set(0.3, (WALL_H - 0.2) / 2, 0.5);
+      obj.add(railL, railR);
+      const rungGeo = new THREE.BoxGeometry(0.66, 0.05, 0.05);
+      for (let i = 0; i < 6; i++) {
+        const rung = new THREE.Mesh(rungGeo, metal);
+        rung.position.set(0, 0.35 + i * 0.42, 0.5);
+        obj.add(rung);
+      }
+      obj.traverse((m) => { m.castShadow = true; });
       baseY = 0;
     } else if (it.kind === "console") {
       const cab = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.0, 0.7), metal);

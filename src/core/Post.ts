@@ -95,6 +95,10 @@ export class Post {
   private frames = 0;
   private dtAccum = 0;
 
+  /** fired whenever the tier changes (startup, pause-menu, or auto-tune) so the
+   *  caller can scale tier-dependent costs it owns — shadows, dust, etc. */
+  onQuality: ((q: Quality) => void) | null = null;
+
   constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     this.renderer = renderer;
     this.scene = scene;
@@ -152,6 +156,7 @@ export class Post {
   /** swap render targets / pass toggles for a quality tier */
   setQuality(q: Quality): void {
     this.quality = q;
+    this.onQuality?.(q);
     if (q === "off") {
       this.renderScale = 1;
       return; // render() takes the passthrough path

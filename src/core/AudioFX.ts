@@ -447,4 +447,42 @@ export class AudioFX {
     if (!this.ready) return;
     this.tone(this.master, this.ctx.currentTime, 0.05, 0.08, "square", 220, 180);
   }
+
+  /** the lift cage descending: a labouring motor whine under a metal rattle */
+  liftDescend(): void {
+    if (!this.ready) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    // motor whine, sags then holds
+    const o = ctx.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(150, t);
+    o.frequency.exponentialRampToValueAtTime(64, t + 0.8);
+    o.frequency.linearRampToValueAtTime(58, t + 3);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 340;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 0.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 3.4);
+    o.connect(lp); lp.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + 3.5);
+    // cage rattle: irregular metallic ticks
+    let tt = t + 0.2;
+    while (tt < t + 3.1) {
+      this.noise(this.master, tt, 0.04, 0.06 + Math.random() * 0.05, "bandpass", 1400 + Math.random() * 1800, 5);
+      tt += 0.1 + Math.random() * 0.22;
+    }
+  }
+
+  /** the cage settling onto its stop — a heavy clunk with a metal ring-off */
+  liftClunk(): void {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    this.tone(this.master, t, 0.34, 0.6, "sine", 96, 30);
+    this.noise(this.master, t, 0.16, 0.35, "lowpass", 1200, 1, 220);
+    this.tone(this.master, t + 0.02, 0.7, 0.09, "triangle", 320, 250);
+    this.tone(this.master, t + 0.03, 0.5, 0.05, "square", 540, 430);
+  }
 }

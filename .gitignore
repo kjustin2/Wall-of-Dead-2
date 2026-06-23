@@ -4,6 +4,11 @@ dist/
 .DS_Store
 scripts/shots/
 
+# improvement-loop artifacts (regenerable; the scripts + goals.json are tracked)
+agent/runs/
+agent/state.json
+agent/report.md
+
 # downloaded CC0 assets (reproducible via `npm run assets`)
 public/textures/
 public/models/

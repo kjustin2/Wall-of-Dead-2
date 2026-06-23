@@ -12,7 +12,11 @@
     "standalone": "npm run build && electron electron/main.cjs",
     "smoke": "node scripts/smoke.mjs",
     "test:e2e": "node scripts/e2e.mjs",
-    "tour": "node scripts/tour.mjs"
+    "tour": "node scripts/tour.mjs",
+    "loop": "node agent/loop.mjs",
+    "loop:auto": "node agent/loop.mjs --auto",
+    "loop:capture": "node agent/capture.mjs",
+    "loop:verify": "node agent/verify.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

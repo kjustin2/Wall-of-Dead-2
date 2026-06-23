@@ -45,7 +45,15 @@ await new Promise((r) => setTimeout(r, 1200));
 await page.screenshot({ path: `${SHOTS}/1-title.png` });
 
 await page.click("#btn-start");
-await new Promise((r) => setTimeout(r, 2500));
+// the descent cutscene plays first; capture it, then skip into playable state
+await new Promise((r) => setTimeout(r, 1500));
+await page.screenshot({ path: `${SHOTS}/2-intro.png` });
+await page.keyboard.press("Space");
+await page
+  .waitForFunction(() => window.__game && window.__game.cine && !window.__game.cine.active, { timeout: 15000, polling: 100 })
+  .catch(() => {});
+await page.evaluate(() => { window.__game.player.frozen = false; });
+await new Promise((r) => setTimeout(r, 600));
 await page.screenshot({ path: `${SHOTS}/2-start.png` });
 
 // torch on, walk forward through the stairwell door area

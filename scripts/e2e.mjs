@@ -1,13 +1,14 @@
 /**
- * Logic playthrough: drives the game via the window.__game hook.
- * Verifies fuse pickups, power-on, final chase, win, and death.
+ * Logic playthrough of the rebuilt game, driven through the window.__game hook.
+ * Verifies connectivity, the act progression (fuses -> power -> core -> chase ->
+ * escape), the cutscene handoffs, the fire-door bash, win, and death paths.
  */
 import puppeteer from "puppeteer-core";
 import { existsSync, mkdirSync } from "node:fs";
 
-// Default to ?lowfx: the full post stack (GTAO/SMAA) is too slow under headless
-// SwiftShader and stalls the game clock past these timeout-based assertions.
-// lowfx still drives the real composer so shader/runtime errors still surface.
+// ?lowfx: the full post stack is too slow under headless SwiftShader and stalls
+// the game clock past these timeout-based assertions. lowfx still drives the
+// real composer so shader/runtime errors still surface.
 const base = process.argv[2] ?? "http://localhost:5199";
 const URL = base.includes("?") ? base : base + "?lowfx";
 const SHOTS = new globalThis.URL("./shots/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -21,103 +22,89 @@ const exe = [
 const browser = await puppeteer.launch({
   executablePath: exe,
   headless: "new",
-  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--autoplay-policy=no-user-gesture-required"]
 });
 const page = await browser.newPage();
 await page.setViewport({ width: 1280, height: 720 });
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
+page.on("console", (m) => { if (m.type() === "error" && !m.text().includes("favicon")) errors.push("console: " + m.text()); });
 
 let failed = 0;
 function check(name, ok) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
   if (!ok) failed++;
 }
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---------- run 0: note reader open/close (regression for "E won't close note") ----------
-// Driven by REAL key presses through the game loop — the bug was loop-ordering
-// (the closing E being consumed a second time and re-opening the note), which
-// calling director.interact() directly would not reproduce.
-await page.goto(URL, { waitUntil: "networkidle0" });
-await page.click("#btn-start");
-await sleep(1200);
+/** start a run: click DESCEND, skip the intro cutscene, land in playable state */
+async function beginRun() {
+  await page.goto(URL, { waitUntil: "networkidle0" });
+  await page.click("#btn-start");
+  await sleep(400);
+  // any key skips the (skippable) descent cutscene
+  await page.keyboard.press("Space");
+  await page
+    .waitForFunction(() => window.__game && window.__game.cine && !window.__game.cine.active, { timeout: 15000, polling: 100 })
+    .catch(() => {});
+  await page.evaluate(() => { window.__game.player.frozen = false; });
+}
+const idle = () => page.waitForFunction(() => !window.__game.cine.active, { timeout: 30000, polling: 100 }).then(() => true).catch(() => false);
 
-// stand 2m south of the work-order note (cell 20,28), facing north toward it
+// ---------- run 0: note reader open/close regression ----------
+await beginRun();
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 20 * 2 + 1;
-  g.player.z = 28 * 2 + 1 + 2;
-  g.player.yaw = 0; // forward = -z = toward the note
+  g.player.x = 27 * 2 + 1;        // work-order note is at cell (27,13)
+  g.player.z = 13 * 2 + 1 + 2;    // 2 m south of it
+  g.player.yaw = 0;               // forward = -z = toward the note
   g.player.pitch = 0;
   g.player.lightOn = true;
   g.player.battery = 1;
 });
-// poll (like every other check here) rather than snapshot a fixed 200ms later —
-// the prompt only updates on a played frame, which is racy under slow headless GL
 const promptShown = await page
   .waitForFunction(() => /read/i.test(document.getElementById("prompt").textContent || ""), { timeout: 5000, polling: 100 })
-  .then(() => true)
-  .catch(() => false);
+  .then(() => true).catch(() => false);
 check("note: read prompt offered when aimed at note", promptShown);
 
 await page.keyboard.press("KeyE");
-const noteOpened = await page
-  .waitForFunction(() => window.__game.hud.noteOpen, { timeout: 4000 })
-  .then(() => true)
-  .catch(() => false);
+const noteOpened = await page.waitForFunction(() => window.__game.hud.noteOpen, { timeout: 4000 }).then(() => true).catch(() => false);
 check("note: E opens the note", noteOpened);
 
 await sleep(250);
-await page.keyboard.press("KeyE"); // close — must STAY closed (not close+reopen)
-await sleep(450);
-const afterClose = await page.evaluate(() => ({
-  noteOpen: window.__game.hud.noteOpen,
-  frozen: window.__game.player.frozen
-}));
-check("note: E closes the note and it stays closed", afterClose.noteOpen === false);
-check("note: player is unfrozen after closing", afterClose.frozen === false);
+await page.keyboard.press("KeyE"); // close
+const closed = await page.waitForFunction(() => window.__game.hud.noteOpen === false, { timeout: 5000, polling: 100 }).then(() => true).catch(() => false);
+await sleep(300); // ...and it must STAY closed (not close+reopen)
+const stayedClosed = closed && (await page.evaluate(() => window.__game.hud.noteOpen === false));
+check("note: E closes the note and it stays closed", stayedClosed);
+check("note: player is unfrozen after closing", await page.evaluate(() => window.__game.player.frozen === false));
 
-// the loop is fully cyclic: a fresh E re-opens the note. (Movement is gated
-// solely on player.frozen, already asserted false above, so this + the
-// unfrozen check together prove the game is playable again — deterministically,
-// without depending on a real W keypress landing in headless.)
 await page.keyboard.press("KeyE");
-const reopened = await page
-  .waitForFunction(() => window.__game.hud.noteOpen, { timeout: 4000 })
-  .then(() => true)
-  .catch(() => false);
+const reopened = await page.waitForFunction(() => window.__game.hud.noteOpen, { timeout: 4000 }).then(() => true).catch(() => false);
 check("note: a fresh E re-opens the note (loop is cyclic)", reopened);
 await page.keyboard.press("KeyE");
 await sleep(400);
-const reclosed = await page.evaluate(() => window.__game.hud.noteOpen === false);
-check("note: the second close also sticks", reclosed);
+check("note: the second close also sticks", await page.evaluate(() => window.__game.hud.noteOpen === false));
 
 // ---------- run 1: full win path ----------
-await page.goto(URL, { waitUntil: "networkidle0" });
-await page.click("#btn-start");
-await sleep(1500);
+await beginRun();
 
-// world connectivity audit: every key route must be walkable
+// connectivity audit: every key route must be walkable
 const routes = await page.evaluate(() => {
   const L = window.__game.level;
   const P = (a, b) => L.findPath(a[0], a[1], b[0], b[1], true) !== null;
   const out = {
-    startToFuseA: P([19, 29], [4, 15]),
-    startToFuseB: P([19, 29], [43, 29]),
-    startToPanel: P([19, 29], [43, 4]),
-    panelToHatch: P([43, 4], [3, 2]),
-    subStairToCore: P([19, 32], [15, 45]), // Act III sub-level is internally walkable
-    concourseToCorridorBlockedPrePower: !L.findPath(19, 18, 19, 8, false) ||
-      L.findPath(19, 18, 19, 8, false).length > 25 // locked d_north must not be the shortcut
+    startToFuseA: P([26, 5], [9, 16]),
+    startToFuseB: P([26, 5], [47, 24]),
+    startToRack: P([26, 5], [46, 4]),
+    rackToHatch: P([46, 4], [24, 4]),
+    subLevelInternallyWalkable: P([26, 33], [20, 46]),
+    // the locked service stair must block the concourse->sublevel shortcut pre-power
+    stairLockedPrePower: L.findPath(26, 17, 26, 30, false) === null
   };
-  // with the gated doors released, the full escape from the core must connect
-  L.door("d_service").locked = false;
-  L.door("d_north").locked = false;
-  out.coreToHatchEscape = P([15, 45], [3, 2]);
-  L.door("d_service").locked = true; // restore so the run still exercises the gating
-  L.door("d_north").locked = true;
+  L.door("d_stair").locked = false;
+  out.coreToHatchEscape = P([20, 46], [24, 4]);
+  L.door("d_stair").locked = true; // restore the gating
   return out;
 });
 for (const [k, v] of Object.entries(routes)) check(`route: ${k}`, v);
@@ -125,104 +112,92 @@ for (const [k, v] of Object.entries(routes)) check(`route: ${k}`, v);
 let r = await page.evaluate(() => {
   const g = window.__game;
   g.director.interact({ type: "item", id: "fuse_a" });
-  return { fuses: g.director.fuses, stalker: g.stalker.state };
+  return { fuses: g.director.fuses };
 });
-check("fuse A picked, stalker wakes", r.fuses === 1 && r.stalker !== "dormant");
+check("fuse A picked up", r.fuses === 1);
 
 r = await page.evaluate(() => {
   const g = window.__game;
   g.director.interact({ type: "item", id: "fuse_b" });
-  return { fuses: g.director.fuses };
+  return { fuses: g.director.fuses, stalker: g.stalker.state };
 });
-check("fuse B picked", r.fuses === 2);
+check("fuse B picked, stalker wakes", r.fuses === 2 && r.stalker !== "dormant");
 
-// refit the fuses at the panel -> power comes up, the service stair unlocks,
-// but the broadcast is dead and there is NO chase yet
+// refit at the rack -> power on cutscene -> service stair unlocks, no chase yet
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 43 * 2 + 1;
+  g.player.x = 46 * 2 + 1;
   g.player.z = 4 * 2 + 1;
   g.director.interact({ type: "item", id: "panel" });
 });
-// powerOn unlocks the service stair in a ~0.9s delayed beat — poll for it
-const serviceUnlocked = await page
-  .waitForFunction(() => !window.__game.level.door("d_service").locked, { timeout: 20000, polling: 100 })
-  .then(() => true)
-  .catch(() => false);
-r = await page.evaluate(() => {
-  const g = window.__game;
-  return { power: g.director.power, chase: g.director.chase, broadcast: g.director.broadcast };
-});
-check("power restored at panel", r.power);
-check("service stair unlocked by power", serviceUnlocked);
-check("no chase / broadcast yet (must go to the core)", r.chase === false && r.broadcast === false);
+const stairUnlocked = await page
+  .waitForFunction(() => !window.__game.level.door("d_stair").locked, { timeout: 30000, polling: 100 })
+  .then(() => true).catch(() => false);
+await idle();
+r = await page.evaluate(() => ({ power: window.__game.director.power, chase: window.__game.director.chase, broadcast: window.__game.director.broadcast }));
+check("power restored at rack", r.power);
+check("service stair unlocked by power", stairUnlocked);
+check("no chase / broadcast yet (must reach the core)", r.chase === false && r.broadcast === false);
 
-// descend to the repeater core and restore the broadcast -> chase + escape unlock
+// descend to the core, restore the broadcast -> chase + escape unlocked
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 15 * 2 + 1;
-  g.player.z = 45 * 2 + 1;
+  g.player.x = 20 * 2 + 1;
+  g.player.z = 46 * 2 + 1;
   g.director.interact({ type: "item", id: "console" });
 });
-// game time can run slower than wall time in headless; poll
 const chaseOk = await page
   .waitForFunction(() => window.__game.director.chase && window.__game.stalker.finalChase, { timeout: 40000, polling: 100 })
-  .then(() => true)
-  .catch(() => false);
-r = await page.evaluate(() => {
-  const g = window.__game;
-  return {
-    broadcast: g.director.broadcast,
-    northUnlocked: !g.level.door("d_north").locked,
-    corridorLit: g.world.lights.get("l_corr_a").on
-  };
-});
+  .then(() => true).catch(() => false);
+r = await page.evaluate(() => ({ broadcast: window.__game.director.broadcast, emLit: window.__game.world.lights.get("l_em_conc").on }));
 check("broadcast restored at core", r.broadcast);
 check("final chase started", chaseOk);
-check("escape route unlocked + lit", r.northUnlocked && r.corridorLit);
+check("emergency escape lights on", r.emLit);
 await page.screenshot({ path: `${SHOTS}/e2e-chase.png` });
 
 // slam a fire door in its face and confirm it breaks through
 await page.evaluate(() => {
   const g = window.__game;
-  const door = g.level.door("f3");
+  const door = g.level.door("d_lobby");
   door.targetOpen = false;
-  // put the stalker right behind it, hunting the player beyond it
-  const [sx, sz] = g.level.cellCenter(31, 3);
+  const [sx, sz] = g.level.cellCenter(26, 15);   // concourse side, behind the door
   g.stalker.setPos(sx, sz);
-  g.player.x = 2 * 25 + 1;
-  g.player.z = 2 * 3 + 1;
+  g.stalker.startFinalChase();
+  g.player.x = 26 * 2 + 1;                        // player up in the shaft head
+  g.player.z = 5 * 2 + 1;
 });
-r = await page
-  .waitForFunction(() => window.__game.level.door("f3").broken, { timeout: 40000 })
-  .then(() => true)
-  .catch(() => false);
-check("stalker bashes through closed fire door", r);
+const bashed = await page
+  .waitForFunction(() => window.__game.level.door("d_lobby").broken, { timeout: 40000, polling: 100 })
+  .then(() => true).catch(() => false);
+check("stalker bashes through closed fire door", bashed);
 
+// ---------- run 1b: reach the hatch and climb out -> escape cutscene -> win ----------
+// (isolated run so the live chase from run 1 can't kill the player at the hatch)
+await beginRun();
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 3 * 2 + 1;
-  g.player.z = 3 * 2 + 1;
-  // keep it away so it can't kill us at the hatch
-  g.stalker.setPos(2 * 35 + 1, 2 * 3 + 1);
+  g.director.power = true;
+  g.director.broadcast = true; // signal already restored; the hatch will release
+  g.player.x = 24 * 2 + 1;
+  g.player.z = 4 * 2 + 1;
+  g.stalker.frozen = true;
+  g.stalker.setPos(46 * 2 + 1, 24 * 2 + 1);
   g.director.interact({ type: "item", id: "hatch" });
 });
-r = await page
-  .waitForFunction(() => !document.getElementById("win").classList.contains("hidden"), { timeout: 15000 })
-  .then(() => true)
-  .catch(() => false);
-check("win screen shows", r);
+// the escape cutscene runs on game-time; under headless SwiftShader the dt-capped
+// clock advances ~3x slower than wall-time, so allow generous real-time headroom.
+const won = await page
+  .waitForFunction(() => !document.getElementById("win").classList.contains("hidden"), { timeout: 40000, polling: 100 })
+  .then(() => true).catch(() => false);
+check("win screen shows", won);
 await page.screenshot({ path: `${SHOTS}/e2e-win.png` });
 
 // ---------- run 2: death path (while reading a note) ----------
-await page.goto(URL, { waitUntil: "networkidle0" });
-await page.click("#btn-start");
-await sleep(1200);
-// open a note, then get killed mid-read
+await beginRun();
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 20 * 2 + 1;
-  g.player.z = 28 * 2 + 1 + 2;
+  g.player.x = 27 * 2 + 1;
+  g.player.z = 13 * 2 + 1 + 2;
   g.player.yaw = 0;
   g.player.pitch = 0;
 });
@@ -234,14 +209,41 @@ await page.evaluate(() => {
   g.stalker.activate();
   g.stalker.setPos(g.player.x + 0.4, g.player.z);
 });
-r = await page
-  .waitForFunction(() => !document.getElementById("dead").classList.contains("hidden"), { timeout: 15000 })
-  .then(() => true)
-  .catch(() => false);
-check("death screen shows on contact", r);
-const noteClosedOnDeath = await page.evaluate(() => window.__game.hud.noteOpen === false);
-check("note: dismissed when death occurs while reading", noteClosedOnDeath);
+const died = await page
+  .waitForFunction(() => !document.getElementById("dead").classList.contains("hidden"), { timeout: 15000, polling: 100 })
+  .then(() => true).catch(() => false);
+check("death screen shows on contact", died);
+check("note: dismissed when death occurs while reading", await page.evaluate(() => window.__game.hud.noteOpen === false));
 await page.screenshot({ path: `${SHOTS}/e2e-dead.png` });
+
+// continuing from the death screen restores play in-place (one-click retry)
+await page.evaluate(() => window.__game.continueGame());
+const resumed = await page
+  .waitForFunction(() => window.__game.director.over === false && window.__game.player.frozen === false, { timeout: 6000, polling: 100 })
+  .then(() => true).catch(() => false);
+check("save: continue after death resets the game to playable", resumed);
+
+// ---------- run 3: save system ----------
+await beginRun(); // NEW GAME clears any save; skipping the intro writes the Arrival checkpoint
+check("save: checkpoint written on arrival", await page.evaluate(() => !!localStorage.getItem("deadair.save.v1")));
+await page.evaluate(() => window.__game.director.interact({ type: "item", id: "fuse_a" }));
+await sleep(250);
+const sv = await page.evaluate(() => JSON.parse(localStorage.getItem("deadair.save.v1")));
+check("save: fuse A recorded in the checkpoint", !!sv && sv.fuseA === true && sv.fuses === 1);
+// restore it and confirm the world reflects the saved progress
+await page.evaluate(() => window.__game.continueGame());
+await sleep(300);
+const restored = await page.evaluate(() => ({
+  taken: window.__game.world.items.get("fuse_a").taken,
+  fuses: window.__game.director.fuses,
+  over: window.__game.director.over,
+  hiddenMesh: window.__game.world.items.get("fuse_a").obj.visible === false
+}));
+check("save: continue restores fuse-A progress", restored.taken && restored.fuses === 1 && restored.over === false && restored.hiddenMesh);
+// NEW GAME clears the save
+await page.evaluate(() => { window.__game.newGame(); });
+await sleep(150);
+check("save: NEW GAME clears the save", await page.evaluate(() => !localStorage.getItem("deadair.save.v1")));
 
 await browser.close();
 if (errors.length) {

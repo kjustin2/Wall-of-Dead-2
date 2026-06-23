@@ -17,7 +17,14 @@ export class Hud {
   private damageEl = el("damage");
   private chaseEl = el("chase-vignette");
   private blackoutEl = el("blackout");
+  private letterboxEl = el("letterbox");
+  private captionEl = el("caption");
+  private skipHintEl = el("skiphint");
+  private flashEl = el("flash");
+  private toastEl = el("toast");
   private subTimer = 0;
+  private capTimer = 0;
+  private toastTimer = 0;
   noteOpen = false;
 
   // film grain + the atmospheric vignette now live in the post-processing
@@ -25,6 +32,19 @@ export class Hud {
 
   show(): void {
     el("hud").classList.remove("hidden");
+  }
+
+  hide(): void {
+    el("hud").classList.add("hidden");
+  }
+
+  /** brief unobtrusive notice, e.g. "checkpoint" */
+  toast(text: string, dur = 2.2): void {
+    // never overlay a cutscene — the letterbox frame owns the screen
+    if (this.letterboxEl.classList.contains("on")) return;
+    this.toastEl.textContent = text;
+    this.toastEl.classList.add("show");
+    this.toastTimer = dur;
   }
 
   setObjective(text: string): void {
@@ -91,10 +111,52 @@ export class Hud {
     this.blackoutEl.style.opacity = String(opacity);
   }
 
+  // ---------- cinematic ----------
+  letterbox(on: boolean): void {
+    this.letterboxEl.classList.toggle("on", on);
+    this.skipHint(on);
+    if (!on) this.hideCaption();
+    if (on) { this.toastEl.classList.remove("show"); this.toastTimer = 0; }
+  }
+
+  /** cinematic dialogue line; `who` is the speaker label (e.g. "VESNA") */
+  caption(text: string, who = "", dur = 4.5): void {
+    this.captionEl.innerHTML = (who ? `<span class="who">${who}</span>` : "") + text;
+    this.captionEl.classList.add("show");
+    this.capTimer = dur;
+  }
+
+  hideCaption(): void {
+    this.captionEl.classList.remove("show");
+    this.capTimer = 0;
+  }
+
+  skipHint(on: boolean): void {
+    this.skipHintEl.classList.toggle("show", on);
+  }
+
+  /** white flash (broadcast surge); strength 0..1 */
+  flash(strength = 1): void {
+    this.flashEl.style.transition = "none";
+    this.flashEl.style.opacity = String(strength);
+    requestAnimationFrame(() => {
+      this.flashEl.style.transition = "opacity 0.7s";
+      this.flashEl.style.opacity = "0";
+    });
+  }
+
   update(dt: number): void {
     if (this.subTimer > 0) {
       this.subTimer -= dt;
       if (this.subTimer <= 0) this.subtitleEl.classList.remove("show");
+    }
+    if (this.capTimer > 0) {
+      this.capTimer -= dt;
+      if (this.capTimer <= 0) this.captionEl.classList.remove("show");
+    }
+    if (this.toastTimer > 0) {
+      this.toastTimer -= dt;
+      if (this.toastTimer <= 0) this.toastEl.classList.remove("show");
     }
   }
 

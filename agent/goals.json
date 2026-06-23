@@ -1,0 +1,157 @@
+{
+  "$comment": "Objective goals for the self-iterating improvement loop. A goal is MET only when its visual probe (deterministic DOM/render state at screenshot time) AND its logic check (deterministic window.__game assertion) both pass. The AI vision pass (analyze.mjs) is advisory: it reads the saved PNGs to flag regressions the probes can't express and to prioritise the next improvement. 'beat' refers to a capture step in capture.mjs. 'probe' is a JS expression evaluated in the page (g = window.__game) returning a boolean.",
+  "meta": {
+    "viewport": { "width": 1280, "height": 720 },
+    "stopWhenAllPass": true,
+    "maxCycles": 6,
+    "maxMinutes": 45,
+    "stallCycles": 2
+  },
+  "goals": [
+    {
+      "id": "title-readable",
+      "title": "Title screen is legible and actionable",
+      "description": "On load the player sees the game title and a clear way to start.",
+      "visual": {
+        "beat": "title",
+        "criteria": "#title screen visible, H1 reads DEAD AIR, DESCEND button visible",
+        "probe": "!document.getElementById('title').classList.contains('hidden') && /DEAD\\s*AIR/i.test(document.querySelector('#title h1').textContent) && getComputedStyle(document.getElementById('btn-start')).display !== 'none'"
+      },
+      "logic": null
+    },
+    {
+      "id": "intro-cinematic",
+      "title": "Descent cutscene presents cinematically",
+      "description": "The opening cutscene shows letterbox bars and a dialogue caption, with the skip hint.",
+      "visual": {
+        "beat": "intro",
+        "criteria": "#letterbox has .on, a caption is showing, skip hint visible",
+        "probe": "document.getElementById('letterbox').classList.contains('on') && document.getElementById('caption').classList.contains('show') && document.getElementById('skiphint').classList.contains('show')"
+      },
+      "logic": null
+    },
+    {
+      "id": "hud-complete",
+      "title": "Core gameplay HUD is present",
+      "description": "During normal play the objective line, compass, crosshair and battery meter are all on screen.",
+      "visual": {
+        "beat": "concourse",
+        "criteria": "#objective has text, #compass visible, #crosshair visible, #battery present",
+        "probe": "!document.getElementById('hud').classList.contains('hidden') && document.getElementById('objective').textContent.trim().length > 0 && getComputedStyle(document.getElementById('compass')).display !== 'none' && getComputedStyle(document.getElementById('crosshair')).display !== 'none' && getComputedStyle(document.getElementById('battery')).display !== 'none'"
+      },
+      "logic": null
+    },
+    {
+      "id": "wayfinding-visible",
+      "title": "Wayfinding points to the objective",
+      "description": "While an objective is active the wayfinder shows an on-screen marker or an off-screen edge arrow with its label, and the compass pip is positioned.",
+      "visual": {
+        "beat": "concourse",
+        "criteria": "objective marker or edge arrow shown with a non-empty label; compass pip present",
+        "probe": "(function(){const m=document.getElementById('objmark');const l=document.getElementById('objlabel');const pip=document.getElementById('compass-pip');const shown=getComputedStyle(m).display!=='none'||getComputedStyle(l).display!=='none';const labelled=(l.textContent||'').trim().length>0;return !!g.director.objectiveTarget && shown && labelled && getComputedStyle(pip).display!=='none';})()"
+      },
+      "logic": null
+    },
+    {
+      "id": "power-lit",
+      "title": "Restoring power visibly lights the station",
+      "description": "After refitting both fuses, main power flips on: the generator light is lit, the breaker panel LED goes green, and the service stair unlocks.",
+      "visual": {
+        "beat": "power",
+        "criteria": "generator room light on, panel LED green-ish",
+        "probe": "(function(){const gl=g.world.lights.get('l_gen');return g.director.power===true && !!gl && gl.on===true && gl.base>0;})()"
+      },
+      "logic": { "check": "powerFlow", "criteria": "power=true, stair unlocked, no premature chase/broadcast" }
+    },
+    {
+      "id": "archive-revelation",
+      "title": "Intake archive reads as the revelation beat",
+      "description": "The sub-level archive (the wall of faces / ledger) is reachable and presented; the archive cutscene fires on entry.",
+      "visual": {
+        "beat": "archive",
+        "criteria": "player is inside the intake hall under its (failing grey-green) lighting; archive scene visible",
+        "probe": "(function(){const [cx,cy]=g.level.worldToCell(g.player.x,g.player.z);return cy>=35 && cy<43 && cx>=14 && cx<34;})()"
+      },
+      "logic": null
+    },
+    {
+      "id": "chase-feedback",
+      "title": "Final chase has clear danger feedback",
+      "description": "When the broadcast is re-armed the final chase starts: the chase vignette turns on, emergency lights pulse, and wayfinding is hidden (you already know: out).",
+      "visual": {
+        "beat": "chase",
+        "criteria": "#chase-vignette has .on, wayfinder hidden, emergency concourse light on",
+        "probe": "(function(){const em=g.world.lights.get('l_em_conc');return g.director.chase===true && document.getElementById('chase-vignette').classList.contains('on') && getComputedStyle(document.getElementById('wayfinder')).display==='none' && !!em && em.on===true;})()"
+      },
+      "logic": { "check": "broadcastChase", "criteria": "broadcast=true, final chase started, emergency lights on" }
+    },
+    {
+      "id": "death-screen",
+      "title": "Death resolves to the count-holds screen",
+      "description": "Contact with the Tallyman triggers the kill-cam then the death screen, and any open note is dismissed.",
+      "visual": {
+        "beat": "death",
+        "criteria": "#dead screen visible with THE COUNT HOLDS and a CONTINUE/QUIT choice",
+        "probe": "!document.getElementById('dead').classList.contains('hidden') && /COUNT\\s*HOLDS/i.test(document.querySelector('#dead h2').textContent)"
+      },
+      "logic": { "check": "deathPath", "criteria": "death screen shows on contact, note dismissed" }
+    },
+    {
+      "id": "win-screen",
+      "title": "Escape resolves to the surface screen",
+      "description": "Opening the hatch after re-arming the broadcast plays the escape cutscene and shows the SURFACE win screen.",
+      "visual": {
+        "beat": "win",
+        "criteria": "#win screen visible reading SURFACE",
+        "probe": "!document.getElementById('win').classList.contains('hidden') && /SURFACE/i.test(document.querySelector('#win h2').textContent)"
+      },
+      "logic": { "check": "escapeWin", "criteria": "hatch after broadcast -> win" }
+    },
+    {
+      "id": "sublevel-grey-green",
+      "title": "The sub-level reads as sickly grey-green",
+      "description": "DESIGN.md gives each zone an identity colour and the sub-level is 'sickly grey-green, failing'. The intake archive lights are already grey-green but the repeater-core light is warm amber, breaking the palette. Every active sub-level room light should be green-dominant so the revelation floor reads as oppressive, not cosy.",
+      "visual": {
+        "beat": "core",
+        "criteria": "repeater-core lighting is grey-green (green-dominant), not warm amber",
+        "probe": "(function(){const c=g.world.lights.get('l_core');return !!c && c.on && c.light.color.g >= c.light.color.r;})()"
+      },
+      "logic": { "check": "sublevelPalette", "criteria": "every sub-level room light (intake A/B, core, pump) is green-dominant and lit" }
+    },
+    {
+      "id": "checkpoint-not-over-cutscene",
+      "title": "Checkpoint toast never overlaps a cutscene",
+      "description": "The '✓ checkpoint' toast must not be shown while a cinematic / letterbox is active — it overlaps the cinematic frame mid-reveal. Toasts should be suppressed (or deferred) whenever the letterbox is on.",
+      "visual": null,
+      "logic": { "check": "toastSuppressedInCutscene", "criteria": "calling toast() while the letterbox is on does not display it" }
+    },
+    {
+      "id": "level-connectivity",
+      "title": "The level is fully traversable and correctly gated",
+      "description": "Every key route is walkable and the service stair is blocked until power is restored.",
+      "visual": null,
+      "logic": { "check": "connectivity", "criteria": "all key routes walkable; stair locked pre-power" }
+    },
+    {
+      "id": "fuse-progression",
+      "title": "Fuse pickups advance the act and wake the threat",
+      "description": "Collecting the two breaker fuses increments the counter and rouses the Tallyman from dormant.",
+      "visual": null,
+      "logic": { "check": "fuseProgression", "criteria": "fuse A then B increments; stalker leaves dormant" }
+    },
+    {
+      "id": "fire-door-bash",
+      "title": "Fire doors buy time, then break",
+      "description": "A slammed fire door delays the Tallyman during the chase, then it bashes through.",
+      "visual": null,
+      "logic": { "check": "fireDoorBash", "criteria": "stalker breaks a closed fire door in chase" }
+    },
+    {
+      "id": "save-resume",
+      "title": "Checkpoints save, restore and clear safely",
+      "description": "Progress checkpoints to localStorage, CONTINUE restores it in-place, and NEW GAME clears it.",
+      "visual": null,
+      "logic": { "check": "saveResume", "criteria": "checkpoint write + restore + new-game clear" }
+    }
+  ]
+}

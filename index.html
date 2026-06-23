@@ -13,9 +13,17 @@
   <!-- in-game HUD -->
   <div id="hud" class="hidden">
     <div id="objective"></div>
+    <div id="compass"><div id="compass-pip"></div></div>
     <div id="crosshair"></div>
     <div id="prompt"></div>
     <div id="subtitle"></div>
+
+    <!-- wayfinding: on-screen objective marker / off-screen edge arrow -->
+    <div id="wayfinder">
+      <div id="objmark"></div>
+      <div id="objlabel"></div>
+    </div>
+
     <div id="meters">
       <div id="battery-wrap" title="flashlight battery">
         <div id="battery-label">TORCH&nbsp;<span class="key">F</span></div>
@@ -38,40 +46,49 @@
     </div>
   </div>
 
+  <!-- cinematic letterbox + dialogue caption -->
+  <div id="letterbox"><div class="bar top"></div><div class="bar bottom"></div></div>
+  <div id="caption"></div>
+  <div id="skiphint">ANY KEY &mdash; SKIP</div>
+  <div id="toast"></div>
+
   <!-- dynamic event overlays (static vignette + grain are in the post pipeline) -->
   <div id="chase-vignette"></div>
   <div id="damage"></div>
+  <div id="flash"></div>
   <div id="blackout"></div>
 
   <!-- screens -->
   <div id="title" class="screen">
     <div class="screen-inner">
       <h1>DEAD&nbsp;AIR</h1>
-      <p class="byline">a vertical slice</p>
-      <p class="story">
-        Repeater 4 went silent nine days ago, but the surface feed still loops the
-        same survivor count. Two breaker fuses were pulled from the generator rack
-        &mdash; pulled, not blown. You are the one they sent down to put them back.
-      </p>
+      <p class="tagline">Repeater&nbsp;4 went silent. They sent you down to bring it back.</p>
+      <div class="menu">
+        <button id="btn-continue" class="hidden">CONTINUE</button>
+        <button id="btn-start">DESCEND</button>
+      </div>
+      <p id="continue-beat" class="subnote"></p>
+      <p class="hint">It hunts light first. Your torch is not your friend.</p>
       <div class="controls">
         <span><b>WASD</b> move</span><span><b>SHIFT</b> run</span><span><b>CTRL</b> crouch</span>
-        <span><b>F</b> torch</span><span><b>E</b> interact</span><span><b>Q</b> throw glass</span>
+        <span><b>F</b> torch</span><span><b>E</b> interact</span><span><b>Q</b> glass</span>
       </div>
-      <p class="hint">It hunts light first, sound second. The torch is not your friend.</p>
-      <button id="btn-start">DESCEND</button>
-      <p id="loadnote">loading textures…</p>
+      <p id="loadnote">loading&hellip;</p>
     </div>
   </div>
 
   <div id="pause" class="screen hidden">
     <div class="screen-inner">
       <h2>PAUSED</h2>
-      <button id="btn-resume">RESUME</button>
       <div id="quality">
         <span class="q-label">GRAPHICS</span>
         <span class="q-opt" data-q="low">LOW</span>
         <span class="q-opt" data-q="medium">MEDIUM</span>
         <span class="q-opt" data-q="high">HIGH</span>
+      </div>
+      <div class="menu">
+        <button id="btn-resume">RESUME</button>
+        <button id="btn-title" class="ghost">QUIT TO TITLE</button>
       </div>
     </div>
   </div>
@@ -80,13 +97,16 @@
     <div class="screen-inner">
       <h2 class="red">THE COUNT HOLDS</h2>
       <p class="story" id="dead-text"></p>
-      <button id="btn-retry">DESCEND AGAIN</button>
+      <div class="menu">
+        <button id="btn-retry">CONTINUE</button>
+        <button id="btn-deadquit" class="ghost">QUIT TO TITLE</button>
+      </div>
     </div>
   </div>
 
   <div id="win" class="screen hidden">
     <div class="screen-inner">
-      <h2 class="green">SIGNAL RESTORED</h2>
+      <h2 class="green">SURFACE</h2>
       <p class="story" id="win-text"></p>
       <button id="btn-again">PLAY AGAIN</button>
     </div>
