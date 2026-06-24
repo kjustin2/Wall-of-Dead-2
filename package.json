@@ -16,7 +16,10 @@
     "loop": "node agent/loop.mjs",
     "loop:auto": "node agent/loop.mjs --auto",
     "loop:capture": "node agent/capture.mjs",
-    "loop:verify": "node agent/verify.mjs"
+    "loop:verify": "node agent/verify.mjs",
+    "perf": "node agent/perf.mjs",
+    "perf:baseline": "node agent/perf.mjs --save-baseline",
+    "diff": "node agent/diff.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

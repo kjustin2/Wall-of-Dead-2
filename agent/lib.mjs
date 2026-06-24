@@ -39,7 +39,11 @@ export function findEdge() {
 export async function launch() {
   const browser = await puppeteer.launch({
     executablePath: findEdge(),
-    headless: "new",
+    // "shell" (old headless) renders WebGL via SwiftShader identically to "new"
+    // (verified — see agent/headless-ab.mjs) but never creates an OS window, so it
+    // can't steal foreground focus / yank the cursor on Windows the way "new"
+    // intermittently does. Do NOT change back to "new".
+    headless: "shell",
     args: [
       "--use-angle=swiftshader",
       "--enable-unsafe-swiftshader",

@@ -12,7 +12,7 @@ const exe = [
 
 const browser = await puppeteer.launch({
   executablePath: exe,
-  headless: "new",
+  headless: "shell", // old headless: renders the same but never steals window focus (see agent/lib.mjs)
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--window-size=1280,720"]
 });
 const page = await browser.newPage();

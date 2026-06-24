@@ -72,6 +72,9 @@ export class Stalker {
   // on its own group pinned to the head so it reads as menace at any distance
   private face!: THREE.Group;
   private maw!: THREE.Mesh;
+  private jaws!: THREE.Group;     // jagged teeth — scaled in by mawOpen
+  private throat!: THREE.Mesh;    // sick crimson glow down the gullet
+  private throatMat!: THREE.MeshStandardMaterial;
   private glowL!: THREE.Sprite;
   private glowR!: THREE.Sprite;
   private rigRoot: THREE.Object3D | null = null; // the scaled rig wrapper (lean/crouch)
@@ -80,6 +83,21 @@ export class Stalker {
   private headTwitchY = 0;
   private leanX = 0;
   private breathT = 0;
+  // the rigged creature's real head joint — the face overlay is pinned to it each
+  // frame so the eyes/maw sit IN the mannequin's head (it sits ~0.5m below the old
+  // hardcoded height when standing) instead of floating above it.
+  private headBone: THREE.Object3D | null = null;
+  private headLocalY = 2.2;     // head height in group-local space, fed to the breath emitter
+  private _v = new THREE.Vector3();
+
+  // dead-flesh skin (shared canvas map + bump, reused across primitive + rig)
+  private fleshTex!: THREE.CanvasTexture;
+
+  // cold breath that fogs from the maw when it closes in (a small recycled pool)
+  private breath!: THREE.Group;
+  private puffs: Array<{ s: THREE.Sprite; life: number; max: number; vx: number; vy: number; vz: number }> = [];
+  private puffTex!: THREE.CanvasTexture;
+  private puffT = 0;
 
   // rigged-creature path (replaces the primitive once the GLB loads)
   private mixer: THREE.AnimationMixer | null = null;
@@ -101,8 +119,9 @@ export class Stalker {
   private buildMesh(): void {
     // pallid, waxy, emaciated — the torch reveals a horrible gaunt thing instead
     // of a dummy hiding in the dark; the dark recesses below give it hollows.
-    const skin = new THREE.MeshStandardMaterial({ color: 0x6b6358, roughness: 0.5, metalness: 0 });
-    const skinPale = new THREE.MeshStandardMaterial({ color: 0x847a6b, roughness: 0.42 });
+    this.fleshTex = this.makeFleshTexture();
+    const skin = this.dressSkin(new THREE.MeshStandardMaterial({ color: 0x8a8074, roughness: 0.62, metalness: 0 }), 2.2);
+    const skinPale = this.dressSkin(new THREE.MeshStandardMaterial({ color: 0xa39685, roughness: 0.5 }), 3);
     this.body = new THREE.Group();
 
     // gaunt, too tall, hunched — thinner and longer-limbed than a person
@@ -150,6 +169,84 @@ export class Stalker {
     this.loadRig();
   }
 
+  /**
+   * Mottled dead-flesh canvas: a waxy base under soft blotches, sick green/purple
+   * bruising, dark veins and pore grain. Tiled across the body so the torch reveals
+   * skin detail instead of a flat plastic dummy. Doubles as a bump map.
+   */
+  private makeFleshTexture(): THREE.CanvasTexture {
+    const c = document.createElement("canvas");
+    c.width = c.height = 256;
+    const g = c.getContext("2d")!;
+    const R = Math.random;
+    g.fillStyle = "#8b8174"; // waxy mid base (material colour tints from here)
+    g.fillRect(0, 0, 256, 256);
+    // soft mottling — lighter waxy highs and grimy lows
+    for (let i = 0; i < 150; i++) {
+      const x = R() * 256, y = R() * 256, r = 6 + R() * 46;
+      const grad = g.createRadialGradient(x, y, 0, x, y, r);
+      const dark = R() < 0.62;
+      grad.addColorStop(0, dark ? "rgba(38,40,36,0.20)" : "rgba(178,168,150,0.16)");
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = grad;
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    // sickly bruising — desaturated green and bruise-purple patches
+    for (let i = 0; i < 18; i++) {
+      const x = R() * 256, y = R() * 256, r = 14 + R() * 40;
+      const grad = g.createRadialGradient(x, y, 0, x, y, r);
+      const purple = R() < 0.5;
+      grad.addColorStop(0, purple ? "rgba(64,46,66,0.16)" : "rgba(70,82,58,0.15)");
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = grad;
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    // veins — thin meandering dark strokes
+    g.lineWidth = 1;
+    for (let i = 0; i < 46; i++) {
+      g.strokeStyle = `rgba(30,26,30,${0.10 + R() * 0.14})`;
+      g.beginPath();
+      let x = R() * 256, y = R() * 256;
+      g.moveTo(x, y);
+      const segs = 3 + Math.floor(R() * 4);
+      for (let s = 0; s < segs; s++) {
+        x += (R() - 0.5) * 40; y += (R() - 0.5) * 40;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    // pore grain
+    for (let i = 0; i < 2600; i++) {
+      g.fillStyle = R() < 0.5 ? `rgba(0,0,0,${R() * 0.16})` : `rgba(200,190,170,${R() * 0.10})`;
+      g.fillRect(R() * 256, R() * 256, 1, 1);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    return t;
+  }
+
+  /** apply the flesh map/bump and a sickly torch-catching fresnel rim to a skin material */
+  private dressSkin(mat: THREE.MeshStandardMaterial, repeat: number): THREE.MeshStandardMaterial {
+    const map = this.fleshTex.clone();
+    map.needsUpdate = true;
+    map.repeat.set(repeat, repeat);
+    mat.map = map;
+    mat.bumpMap = map;
+    mat.bumpScale = 0.012;
+    // a faint sick-green rim where the surface turns away from view — wet, waxy,
+    // and it makes the silhouette catch the torch like dead skin, not plastic.
+    mat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <emissivemap_fragment>",
+        `#include <emissivemap_fragment>
+         float deadRim = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
+         totalEmissiveRadiance += vec3(0.055, 0.085, 0.07) * deadRim;`
+      );
+    };
+    mat.needsUpdate = true;
+    return mat;
+  }
+
   /** soft radial sprite for the eye bloom */
   private makeGlowTex(): THREE.CanvasTexture {
     const c = document.createElement("canvas");
@@ -172,41 +269,122 @@ export class Stalker {
    */
   private buildFace(): void {
     this.face = new THREE.Group();
-    const sockMat = new THREE.MeshStandardMaterial({ color: 0x040507, roughness: 1 });
-    const sockGeo = new THREE.SphereGeometry(0.058, 8, 8);
+    // deep, black, slanted eye sockets that swallow the brow — angled inward-up so
+    // the glare reads as a permanent scowl rather than two round lamps
+    const sockMat = new THREE.MeshStandardMaterial({ color: 0x010203, roughness: 1 });
+    const sockGeo = new THREE.SphereGeometry(0.07, 12, 12);
     const sockL = new THREE.Mesh(sockGeo, sockMat);
-    sockL.position.set(-0.062, 0.025, -0.05);
-    sockL.scale.set(1, 1.25, 0.6);
+    sockL.position.set(-0.056, 0.03, -0.04);
+    sockL.scale.set(1.1, 1.5, 0.7);
+    sockL.rotation.z = -0.5;
     const sockR = sockL.clone();
-    sockR.position.x = 0.062;
+    sockR.position.x = 0.056;
+    sockR.rotation.z = 0.5;
 
-    const eyeGeo = new THREE.SphereGeometry(0.03, 10, 10);
-    this.eyeMatL = new THREE.MeshBasicMaterial({ color: 0xdef5ea, transparent: true, opacity: 0 });
-    this.eyeMatR = new THREE.MeshBasicMaterial({ color: 0xdef5ea, transparent: true, opacity: 0 });
+    // angled brow ridges meeting in a hard V over the bridge — a fixed scowl
+    const browMat = new THREE.MeshStandardMaterial({ color: 0x0d0b09, roughness: 1 });
+    const browGeo = new THREE.BoxGeometry(0.13, 0.026, 0.05);
+    const browL = new THREE.Mesh(browGeo, browMat);
+    browL.position.set(-0.05, 0.084, -0.08);
+    browL.rotation.z = 0.34;
+    const browR = new THREE.Mesh(browGeo, browMat);
+    browR.position.set(0.05, 0.084, -0.08);
+    browR.rotation.z = -0.34;
+
+    // a gaunt nasal cavity + sunken cheek hollows turn the bald head into a skull
+    const nasal = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.062, 0.03), sockMat);
+    nasal.position.set(0, -0.014, -0.086);
+    const cheekGeo = new THREE.SphereGeometry(0.05, 8, 8);
+    const cheekL = new THREE.Mesh(cheekGeo, sockMat);
+    cheekL.position.set(-0.072, -0.05, -0.05); cheekL.scale.set(0.62, 1.25, 0.45); cheekL.rotation.z = 0.5;
+    const cheekR = cheekL.clone(); cheekR.position.x = 0.072; cheekR.rotation.z = -0.5;
+
+    // sickly recessed eyes: small, narrowed, with a tall slit pupil — piercing and
+    // reptilian, not the big round orbs that read as cartoonish
+    const eyeGeo = new THREE.SphereGeometry(0.02, 14, 14);
+    this.eyeMatL = new THREE.MeshBasicMaterial({ color: 0xb6ee36, transparent: true, opacity: 0 });
+    this.eyeMatR = new THREE.MeshBasicMaterial({ color: 0xb6ee36, transparent: true, opacity: 0 });
     this.eyeL = new THREE.Mesh(eyeGeo, this.eyeMatL);
-    this.eyeL.position.set(-0.062, 0.025, -0.085);
+    this.eyeL.position.set(-0.052, 0.024, -0.088);
+    this.eyeL.scale.set(1.05, 0.78, 1);
     this.eyeR = new THREE.Mesh(eyeGeo, this.eyeMatR);
-    this.eyeR.position.set(0.062, 0.025, -0.085);
+    this.eyeR.position.set(0.052, 0.024, -0.088);
+    this.eyeR.scale.set(1.05, 0.78, 1);
+    // a tall slit pupil pinned in front of each eye so they read as eyes, not lamps
+    const pupilGeo = new THREE.SphereGeometry(0.009, 8, 8);
+    const pupilMat = new THREE.MeshBasicMaterial({ color: 0x020600 });
+    const pupL = new THREE.Mesh(pupilGeo, pupilMat); pupL.position.set(-0.052, 0.024, -0.1); pupL.scale.set(0.5, 1.7, 1);
+    const pupR = new THREE.Mesh(pupilGeo, pupilMat); pupR.position.set(0.052, 0.024, -0.1); pupR.scale.set(0.5, 1.7, 1);
 
     const glowTex = this.makeGlowTex();
     const mkGlow = () =>
-      new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xaef0d6, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xc6f04a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.glowL = mkGlow();
-    this.glowL.position.set(-0.062, 0.025, -0.09);
-    this.glowL.scale.set(0.22, 0.22, 1);
+    this.glowL.position.set(-0.052, 0.024, -0.09);
+    this.glowL.scale.set(0.18, 0.18, 1);
     this.glowR = mkGlow();
-    this.glowR.position.set(0.062, 0.025, -0.09);
-    this.glowR.scale.set(0.22, 0.22, 1);
+    this.glowR.position.set(0.052, 0.024, -0.09);
+    this.glowR.scale.set(0.18, 0.18, 1);
 
-    // gaping maw — a black cone pivoted at the top so it opens downward
-    const mawGeo = new THREE.ConeGeometry(0.072, 0.24, 8, 1, true);
-    mawGeo.translate(0, -0.12, 0);
+    // gaping maw — a black cavity recessed into the lower face that drops open
+    const mawGeo = new THREE.ConeGeometry(0.05, 0.17, 9, 1, true);
+    mawGeo.translate(0, -0.085, 0);
     this.maw = new THREE.Mesh(mawGeo, new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }));
-    this.maw.position.set(0, -0.11, -0.075);
-    this.maw.scale.y = 0.04;
+    this.maw.position.set(0, -0.075, -0.05);
+    this.maw.scale.y = 0.05;
 
-    this.face.add(sockL, sockR, this.maw, this.eyeL, this.eyeR, this.glowL, this.glowR);
+    // a dim, bloody glow down the gullet, brightening only as it gapes wide
+    this.throatMat = new THREE.MeshStandardMaterial({ color: 0x140402, emissive: 0x5a0d06, emissiveIntensity: 0, side: THREE.DoubleSide });
+    this.throat = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.12, 9, 1, true), this.throatMat);
+    this.throat.position.set(0, -0.1, -0.046);
+
+    // jagged teeth — two rows of crooked fangs; the jaws group scales open with the maw
+    this.jaws = new THREE.Group();
+    this.jaws.position.set(0, -0.028, -0.06);
+    const toothMat = new THREE.MeshStandardMaterial({ color: 0x9c9072, roughness: 0.55 });
+    const toothGeo = new THREE.ConeGeometry(0.009, 0.038, 5);
+    const rndt = () => (Math.random() - 0.5);
+    for (let i = 0; i < 7; i++) {
+      const fx = (i / 6 - 0.5) * 0.092;
+      const upper = new THREE.Mesh(toothGeo, toothMat);
+      upper.position.set(fx, -0.012 + rndt() * 0.005, rndt() * 0.008);
+      upper.rotation.set(Math.PI + rndt() * 0.16, 0, rndt() * 0.2);
+      upper.scale.setScalar(0.8 + Math.random() * 0.5);
+      const lower = new THREE.Mesh(toothGeo, toothMat);
+      lower.position.set(fx + rndt() * 0.007, -0.092 + rndt() * 0.005, rndt() * 0.008);
+      lower.rotation.set(rndt() * 0.16, 0, rndt() * 0.2);
+      lower.scale.setScalar(0.7 + Math.random() * 0.5);
+      this.jaws.add(upper, lower);
+    }
+    this.jaws.scale.y = 0.02;
+
+    this.face.add(sockL, sockR, browL, browR, nasal, cheekL, cheekR, this.maw, this.throat, this.jaws, this.eyeL, this.eyeR, pupL, pupR, this.glowL, this.glowR);
     this.group.add(this.face);
+
+    // cold breath that fogs from the maw as it closes in
+    this.puffTex = this.makePuffTex();
+    this.breath = new THREE.Group();
+    for (let i = 0; i < 6; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, color: 0xbcd0d6, transparent: true, opacity: 0, depthWrite: false }));
+      s.scale.setScalar(0.001);
+      this.breath.add(s);
+      this.puffs.push({ s, life: 0, max: 1, vx: 0, vy: 0, vz: 0 });
+    }
+    this.group.add(this.breath);
+  }
+
+  /** soft, slightly cloudy radial sprite for breath vapour */
+  private makePuffTex(): THREE.CanvasTexture {
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const g = c.getContext("2d")!;
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, "rgba(255,255,255,0.7)");
+    grad.addColorStop(0.5, "rgba(220,232,236,0.28)");
+    grad.addColorStop(1, "rgba(200,220,228,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
   }
 
   private loadRig(): void {
@@ -219,20 +397,24 @@ export class Stalker {
   private attachRig(scene: THREE.Object3D, clips: THREE.AnimationClip[]): void {
     // redress the grey mannequin as a pallid, waxy, gaunt thing — the torch
     // catches it like dead flesh rather than reading as a plastic dummy
-    const skin = new THREE.MeshStandardMaterial({ color: 0x756b5b, roughness: 0.5, metalness: 0 });
+    const skin = this.dressSkin(new THREE.MeshStandardMaterial({ color: 0x7c7669, roughness: 0.64, metalness: 0 }), 4);
     scene.traverse((o) => {
       if (o instanceof THREE.Mesh || o instanceof THREE.SkinnedMesh) {
         o.material = skin;
         o.castShadow = true;
         o.frustumCulled = false; // skinned bounds can cull wrongly at this scale
       }
+      if (o instanceof THREE.Bone && o.name === "mixamorigHead") this.headBone = o;
     });
     // Mixamo models face +Z; the existing convention rotates the group by
     // facing+PI for a -Z-facing model, so flip the rig to face -Z locally.
     // Non-uniform scale stretches it taller and thinner — uncanny, gaunt.
     const inner = new THREE.Group();
     inner.rotation.y = Math.PI;
-    inner.scale.set(RIG_SCALE * 0.9, RIG_SCALE * 1.05, RIG_SCALE * 0.9);
+    // gaunt + too tall: pull the mannequin thin and stretch it vertically so the
+    // athletic base reads as a starved, wrong-proportioned thing (kill-cam still
+    // frames the head, which the face is pinned to)
+    inner.scale.set(RIG_SCALE * 0.78, RIG_SCALE * 1.1, RIG_SCALE * 0.78);
     inner.add(scene);
     this.group.remove(this.body);
     this.group.add(inner);
@@ -279,9 +461,23 @@ export class Stalker {
 
   /** pin the face to the head and drive eyes / maw / head-tics (both render paths) */
   private updateFace(dt: number, dToPlayer: number): void {
-    const headY = this.mixer ? 2.2 : 2.3;
-    // bow + lower the head while crouched (dormant), rise as it stands
-    this.face.position.set(0, headY - this.crouchPose * 0.5, -this.crouchPose * 0.14);
+    // Pin the face to the creature's actual head. The rigged mannequin exposes a
+    // head joint; read its live position (group-local) so the eyes/maw ride the
+    // real head through every animation/crouch/lean instead of a fixed height that
+    // left the face hovering ~0.5m above the skull. The primitive falls back to its
+    // sphere-head height and the crouch bow.
+    if (this.headBone) {
+      this.group.updateWorldMatrix(true, false);
+      this.headBone.updateWorldMatrix(true, false);
+      this.headBone.getWorldPosition(this._v);
+      this.group.worldToLocal(this._v);
+      this.headLocalY = this._v.y + 0.12;       // head joint → eye level
+      this.face.position.set(this._v.x, this.headLocalY, this._v.z - 0.12);
+    } else {
+      const headY = 2.3;
+      this.headLocalY = headY - this.crouchPose * 0.5;
+      this.face.position.set(0, this.headLocalY, -this.crouchPose * 0.14);
+    }
 
     // head tics: occasional sharp, wrong-angle jerks that decay back
     this.twitchT -= dt;
@@ -298,16 +494,57 @@ export class Stalker {
     // the maw yawns open as it hunts / closes in
     const wantMaw = this.state === "chase" && dToPlayer < 10 ? 1 : dToPlayer < 3 ? 0.7 : 0;
     this.mawOpen += (wantMaw - this.mawOpen) * Math.min(1, 4 * dt);
-    this.maw.scale.y = 0.04 + this.mawOpen * 1.7;
+    this.maw.scale.y = 0.06 + this.mawOpen * 0.95;
+    // teeth ride open with the jaw; the gullet reddens as it gapes
+    this.jaws.scale.y = 0.06 + this.mawOpen * 0.85;
+    this.throat.scale.y = 0.25 + this.mawOpen * 0.9;
+    this.throatMat.emissiveIntensity = this.mawOpen * 0.8;
 
     // eye bloom follows eye opacity and flares a little when locked on (maw open);
     // kept smaller than the eye spacing so it reads as two eyes, not one blob
     const o = this.eyeMatL.opacity;
-    (this.glowL.material as THREE.SpriteMaterial).opacity = o * 0.6;
-    (this.glowR.material as THREE.SpriteMaterial).opacity = o * 0.6;
-    const flare = 0.075 + this.mawOpen * 0.025;
+    (this.glowL.material as THREE.SpriteMaterial).opacity = o * 0.75;
+    (this.glowR.material as THREE.SpriteMaterial).opacity = o * 0.75;
+    const flare = 0.08 + this.mawOpen * 0.04 + o * 0.02;
     this.glowL.scale.setScalar(flare);
     this.glowR.scale.setScalar(flare);
+
+    this.updateBreath(dt, dToPlayer);
+  }
+
+  /** cold breath fogging from the maw when it hunts close — recycled sprite pool */
+  private updateBreath(dt: number, dToPlayer: number): void {
+    const mawY = this.headLocalY - 0.16; // breath fogs from the maw, just under the eyes
+    // forward (the face looks down -localZ; group is rotated by facing+PI)
+    const fwd = this.facing; // world heading toward the player when hunting
+    const fx = Math.sin(fwd), fz = Math.cos(fwd);
+
+    this.puffT -= dt;
+    const wantBreath = (this.state === "chase" || this.state === "investigate") && dToPlayer < 8;
+    if (wantBreath && this.puffT <= 0) {
+      this.puffT = 0.28 + Math.random() * 0.22;
+      const p = this.puffs.find((q) => q.life <= 0);
+      if (p) {
+        p.life = p.max = 0.7 + Math.random() * 0.4;
+        p.s.position.set(this.x + fx * 0.18, mawY, this.z + fz * 0.18);
+        const spread = 0.18;
+        p.vx = fx * 0.45 + (Math.random() - 0.5) * spread;
+        p.vz = fz * 0.45 + (Math.random() - 0.5) * spread;
+        p.vy = -0.12 - Math.random() * 0.1;
+      }
+    }
+    for (const p of this.puffs) {
+      if (p.life <= 0) { p.s.visible = false; continue; }
+      p.life -= dt;
+      const f = p.life / p.max; // 1 → 0
+      p.s.visible = true;
+      p.s.position.x += p.vx * dt;
+      p.s.position.y += p.vy * dt;
+      p.s.position.z += p.vz * dt;
+      const sc = 0.12 + (1 - f) * 0.42;
+      p.s.scale.setScalar(sc);
+      (p.s.material as THREE.SpriteMaterial).opacity = Math.sin(Math.min(1, f) * Math.PI) * 0.4;
+    }
   }
 
   setPos(x: number, z: number): void {
@@ -678,8 +915,13 @@ export class Stalker {
     const toP = Math.atan2(px - this.x, pz - this.z);
     let fdiff = Math.abs(toP - this.facing) % (Math.PI * 2);
     if (fdiff > Math.PI) fdiff = Math.PI * 2 - fdiff;
-    const eyesOn = fdiff < 0.6 && dToPlayer < 28 ? Math.min(1, (28 - dToPlayer) / 12) : 0;
-    this.eyeMatL.opacity += (eyesOn - this.eyeMatL.opacity) * Math.min(1, 6 * dt);
+    // it locks on harder while hunting: a wider gaze cone and a hotter burn up close
+    const hunting = this.state === "chase";
+    const cone = hunting ? 1.0 : 0.6;
+    const eyesOn = fdiff < cone && dToPlayer < 30
+      ? Math.min(1, (30 - dToPlayer) / 12) * (hunting ? 1.15 : 1)
+      : 0;
+    this.eyeMatL.opacity += (Math.min(1, eyesOn) - this.eyeMatL.opacity) * Math.min(1, 6 * dt);
     this.eyeMatR.opacity = this.eyeMatL.opacity;
     this.updateFace(dt, dToPlayer);
   }

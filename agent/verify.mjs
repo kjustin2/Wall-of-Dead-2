@@ -224,6 +224,30 @@ try {
   });
   const gaveUp = await waitTrue(() => window.__game.stalker.state !== "chase", 14000);
   check("hideGiveUp", "monster gives up the chase once you get away", gaveUp);
+
+  // ========== run 9: perf instrument wired + producing sane numbers ==========
+  await beginRun(page, URL);
+  check("perfHarness", "window.__game.perf exposed", await page.evaluate(() => typeof window.__game.perf?.summary === "function"));
+  await page.evaluate(() => window.__game.perf.reset());
+  await sleep(900); // collect a window of real frames
+  const perf = await page.evaluate(() => window.__game.perf.summary());
+  check("perfHarness", "frames sampled", perf.frames > 0);
+  check("perfHarness", "draw calls > 0 (scene is rendering)", perf.calls > 0);
+  check("perfHarness", "triangles > 0", perf.triangles > 0);
+  check("perfHarness", "frame time finite & positive", Number.isFinite(perf.ms.avg) && perf.ms.avg > 0);
+  check("perfHarness", "cpu/render split recorded", perf.cpuMs >= 0 && perf.renderMs >= 0);
+  // reset() must actually clear the window (regression probe for a stale-buffer bug)
+  await page.evaluate(() => window.__game.perf.reset());
+  const afterReset = await page.evaluate(() => window.__game.perf.summary().frames);
+  check("perfHarness", "reset() clears the sampling window", afterReset <= 2);
+  // toggling the overlay creates the DOM node
+  const overlayWorks = await page.evaluate(() => {
+    window.__game.perf.setOverlay(true);
+    const on = !!document.getElementById("perf-overlay") && window.__game.perf.isOverlayOn();
+    window.__game.perf.setOverlay(false);
+    return on;
+  });
+  check("perfHarness", "overlay toggles + injects #perf-overlay", overlayWorks);
 } catch (e) {
   errors.push("verify exception: " + String(e.message || e));
 } finally {

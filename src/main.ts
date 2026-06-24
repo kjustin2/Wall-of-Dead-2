@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { Input } from "./core/Input";
 import { AudioFX } from "./core/AudioFX";
 import { Post } from "./core/Post";
+import { Perf } from "./core/Perf";
 import { Assets } from "./core/Assets";
 import { Save } from "./core/Save";
 import { Level } from "./world/Level";
@@ -37,6 +38,7 @@ const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerH
 camera.rotation.order = "YXZ";
 
 const post = new Post(renderer, scene, camera);
+const perf = new Perf(renderer);
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -551,6 +553,7 @@ const lampDir = new THREE.Vector3(); // reused each frame (avoid per-frame GC)
 
 function frame(): void {
   requestAnimationFrame(frame);
+  perf.frameStart();
   const dt = Math.min(0.05, clock.getDelta());
   const t = clock.elapsedTime;
 
@@ -623,7 +626,8 @@ function frame(): void {
     while (dy > Math.PI) dy -= Math.PI * 2;
     while (dy < -Math.PI) dy += Math.PI * 2;
     player.yaw += dy * Math.min(1, 12 * dt);
-    const targetPitch = Math.atan2(2.2 - player.eyeY, d);
+    // look up into its glowing eyes (~2.35m on the taller gaunt rig), not its chest
+    const targetPitch = Math.atan2(2.35 - player.eyeY, d);
     player.pitch += (targetPitch - player.pitch) * Math.min(1, 12 * dt);
     shake = Math.max(shake, 0.35);
   }
@@ -669,7 +673,9 @@ function frame(): void {
   updateBeacon(t);
 
   post.setMood(stalker.state === "chase" && !director.over, director.dying);
+  perf.beforeRender();
   post.render(dt);
+  perf.afterRender();
   input.flush();
 }
 
@@ -754,4 +760,4 @@ const debug = {
     return { ok: true, name };
   }
 };
-window.__game = { player, stalker, director, level, world, fx, hud, post, cine, wayfinder, newGame, continueGame, quitToTitle, debug };
+window.__game = { player, stalker, director, level, world, fx, hud, post, perf, cine, wayfinder, newGame, continueGame, quitToTitle, debug };

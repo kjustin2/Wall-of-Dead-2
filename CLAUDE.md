@@ -21,7 +21,20 @@ Headless integration tests (drive system **Edge** via `puppeteer-core`, no brows
 npm run smoke -- http://localhost:5173   # boots, plays intro + a few seconds, screenshots, fails on console/page errors
 npm run test:e2e -- http://localhost:5173 # scripted playthrough: fuses→power→core→chase→escape, plus death + save paths
 npm run tour                              # screenshots key locations → scripts/shots/
+npm run perf                              # profile every beat (draw calls/tris/cpu/render + health) vs perf-baseline.json
+npm run perf:baseline                     # record the current run AS the perf baseline
+npm run diff -- <before-dir> <after-dir>  # perceptual visual-diff between two capture runs → magenta heatmaps
 ```
+
+`agent/perf.mjs` is the **performance + health gate**: it cuts to every debug
+scenario, samples the `window.__game.perf` instrument (real frame time, a CPU-vs-
+render split, `renderer.info` draw calls/tris/geo/tex/programs counted across all
+post passes, JS heap), runs a NaN/out-of-bounds/runaway-draw **health probe**, and
+flags ▲ regressions / ▼ optimisations vs the baseline. Headless fps/ms are software-
+bound (compare to themselves); the deterministic cross-run signals are
+`renderer.info` + CPU ms. The in-game overlay toggles with `` ` `` / **F3** (or
+`?perf`) so a screenshot shows the numbers. See `agent/README.md` for the full
+performance + visual-diff workflow.
 
 There is **no unit-test runner and no linter**. `scripts/e2e.mjs` is the closest thing to a test suite — it's a sequence of labelled `check(name, ok)` assertions across several runs. To run "one test," temporarily comment out the other runs in that file, or drive `window.__game` manually in a browser console (see below).
 
@@ -33,7 +46,7 @@ There is **no unit-test runner and no linter**. `scripts/e2e.mjs` is the closest
 
 ## The `window.__game` debug/test hook
 
-`src/main.ts` exposes the entire live object graph on `window.__game` (`player, stalker, director, level, world, fx, hud, post, cine, wayfinder, newGame, continueGame, debug`). This is the seam every headless test and manual debug session drives — e.g. `__game.director.interact({type:"item", id:"fuse_a"})`, `__game.player.x = ...`, `__game.level.findPath(...)`. When changing public fields/methods on those classes, expect to update `scripts/e2e.mjs`.
+`src/main.ts` exposes the entire live object graph on `window.__game` (`player, stalker, director, level, world, fx, hud, post, perf, cine, wayfinder, newGame, continueGame, debug`). `perf` is the performance instrument (`perf.summary()` / `perf.reset()` / `perf.setOverlay(bool)`), driven by `agent/perf.mjs`. This is the seam every headless test and manual debug session drives — e.g. `__game.director.interact({type:"item", id:"fuse_a"})`, `__game.player.x = ...`, `__game.level.findPath(...)`. When changing public fields/methods on those classes, expect to update `scripts/e2e.mjs`.
 
 ### Debug scenario system — cut to any beat
 

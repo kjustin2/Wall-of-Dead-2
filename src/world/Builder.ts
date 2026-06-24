@@ -131,6 +131,74 @@ function makePortraitTexture(seed: number): THREE.CanvasTexture {
   return t;
 }
 
+/** an aged, hand-scrawled note: ruled paper, jittery "handwriting", a coffee stain */
+function makeNoteTexture(seed: number): THREE.CanvasTexture {
+  const rnd = lcg(seed);
+  const c = document.createElement("canvas");
+  c.width = 200;
+  c.height = 260;
+  const g = c.getContext("2d")!;
+  // aged paper, warm and uneven
+  const base = 188 + rnd() * 28;
+  g.fillStyle = `rgb(${base},${base - 10},${base - 30})`;
+  g.fillRect(0, 0, 200, 260);
+  // blotchy aging
+  for (let i = 0; i < 60; i++) {
+    const x = rnd() * 200, y = rnd() * 260, r = 8 + rnd() * 36;
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, `rgba(120,96,56,${rnd() * 0.10})`);
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+  // faint ruled lines
+  g.strokeStyle = "rgba(70,90,120,0.18)";
+  g.lineWidth = 1;
+  for (let y = 40; y < 250; y += 22) {
+    g.beginPath(); g.moveTo(14, y); g.lineTo(186, y); g.stroke();
+  }
+  // a heading + rows of jittery "handwriting" strokes
+  g.strokeStyle = "rgba(20,18,22,0.72)";
+  for (let row = 0; row < 9; row++) {
+    const y = 34 + row * 22 + (rnd() - 0.5) * 3;
+    const heading = row === 0;
+    let x = 18 + (heading ? 0 : rnd() * 8);
+    const right = 186 - rnd() * (heading ? 70 : 30 + rnd() * 60);
+    g.lineWidth = heading ? 2.2 : 1.1 + rnd() * 0.6;
+    g.beginPath();
+    g.moveTo(x, y);
+    while (x < right) {
+      const step = 3 + rnd() * 6;
+      x += step;
+      // break words with small gaps
+      if (rnd() < 0.16) { g.moveTo(x + 4, y); x += 4; continue; }
+      g.lineTo(x, y - (rnd() - 0.5) * (heading ? 7 : 5));
+    }
+    g.stroke();
+  }
+  // coffee-ring stain
+  {
+    const x = 40 + rnd() * 120, y = 150 + rnd() * 80, r = 18 + rnd() * 16;
+    g.strokeStyle = `rgba(96,64,30,${0.18 + rnd() * 0.16})`;
+    g.lineWidth = 3;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+    const grad = g.createRadialGradient(x, y, r * 0.4, x, y, r);
+    grad.addColorStop(0, "rgba(120,80,40,0)");
+    grad.addColorStop(1, "rgba(110,72,34,0.12)");
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+  // darkened/worn edges
+  const vg = g.createRadialGradient(100, 130, 70, 100, 130, 150);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(20,12,4,0.5)");
+  g.fillStyle = vg;
+  g.fillRect(0, 0, 200, 260);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 const FACE_ROT: Record<string, number> = { s: 0, n: Math.PI, e: Math.PI / 2, w: -Math.PI / 2 };
 const FACE_OFF: Record<string, [number, number]> = { s: [0, 1.01], n: [0, -1.01], e: [1.01, 0], w: [-1.01, 0] };
 
@@ -474,52 +542,116 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
   const items = new Map<string, ItemHandle>();
   let panelLed = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.4 });
   let coreScreen = new THREE.MeshStandardMaterial({ color: 0x111416, emissive: 0x882017, emissiveIntensity: 0.9 });
+  // shared detail materials for the hand-props
+  const ceramic = new THREE.MeshStandardMaterial({ color: 0xcabfa2, roughness: 0.62, metalness: 0 });
+  const brass = new THREE.MeshStandardMaterial({ color: 0xb0894a, roughness: 0.34, metalness: 0.9 });
+  const darkPlastic = new THREE.MeshStandardMaterial({ color: 0x191b1e, roughness: 0.62, metalness: 0.1 });
+  const labelYellow = new THREE.MeshStandardMaterial({ color: 0xb39a36, roughness: 0.72, metalness: 0 });
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x24492c, roughness: 0.12, metalness: 0, transparent: true, opacity: 0.62,
+    emissive: 0x12301a, emissiveIntensity: 0.4
+  });
+  // pickups rest on a small wooden supply crate: a body, corner battens and top/
+  // bottom frame rails so it reads as crated stores, not a plain plinth.
   const PED_TOP = 0.4;
-  const pedGeo = new THREE.BoxGeometry(0.52, PED_TOP, 0.52);
+  const pedGeo = new THREE.BoxGeometry(0.5, PED_TOP, 0.5);
+  const battenMat = new THREE.MeshStandardMaterial({ color: 0x6b5536, roughness: 0.82, metalness: 0 });
+  const battenV = new THREE.BoxGeometry(0.07, PED_TOP + 0.01, 0.07);
+  const railH = new THREE.BoxGeometry(0.54, 0.06, 0.07);
   const addPedestal = (px: number, pz: number): void => {
-    const ped = new THREE.Mesh(pedGeo, woodDark);
-    ped.position.set(px, PED_TOP / 2, pz);
-    ped.rotation.y = rnd() * Math.PI;
-    ped.castShadow = true;
-    ped.receiveShadow = true;
-    group.add(ped);
+    const crate = new THREE.Group();
+    crate.position.set(px, 0, pz);
+    crate.rotation.y = rnd() * Math.PI;
+    const body = new THREE.Mesh(pedGeo, woodDark);
+    body.position.y = PED_TOP / 2;
+    crate.add(body);
+    // four corner battens
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      const b = new THREE.Mesh(battenV, battenMat);
+      b.position.set(sx * 0.235, PED_TOP / 2, sz * 0.235);
+      crate.add(b);
+    }
+    // top + bottom frame rails on the two visible faces
+    for (const sz of [-1, 1]) for (const yy of [0.06, PED_TOP - 0.06]) {
+      const r = new THREE.Mesh(railH, battenMat);
+      r.position.set(0, yy, sz * 0.235);
+      crate.add(r);
+      const r2 = new THREE.Mesh(railH, battenMat);
+      r2.rotation.y = Math.PI / 2;
+      r2.position.set(sz * 0.235, yy, 0);
+      crate.add(r2);
+    }
+    crate.traverse((m) => { m.castShadow = true; m.receiveShadow = true; });
+    group.add(crate);
   };
   for (const it of ITEMS) {
     const [x, z] = level.cellCenter(it.cx, it.cy);
     const obj = new THREE.Group();
     let baseY = 0;
     if (it.kind === "fuse") {
-      const m = new THREE.Mesh(
-        new THREE.BoxGeometry(0.14, 0.34, 0.14),
-        new THREE.MeshStandardMaterial({ color: 0x553311, emissive: 0xcc5510, emissiveIntensity: 0.5 })
+      // a ceramic cartridge breaker fuse: brass end-caps, a band, and a live-amber window
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.057, 0.057, 0.22, 18), ceramic);
+      const capGeo = new THREE.CylinderGeometry(0.066, 0.066, 0.045, 18);
+      const capT = new THREE.Mesh(capGeo, brass); capT.position.y = 0.122;
+      const capB = new THREE.Mesh(capGeo, brass); capB.position.y = -0.122;
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.055, 18), darkPlastic);
+      const win = new THREE.Mesh(
+        new THREE.BoxGeometry(0.03, 0.075, 0.014),
+        new THREE.MeshStandardMaterial({ color: 0x3a1a05, emissive: 0xff6a14, emissiveIntensity: 1.7 })
       );
-      obj.add(m);
+      win.position.set(0, 0, 0.058);
+      obj.add(body, capT, capB, band, win);
       addPedestal(x, z);
-      baseY = PED_TOP + 0.17; // stood on the crate
+      baseY = PED_TOP + 0.15; // stood on the crate
     } else if (it.kind === "battery") {
-      const m = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.07, 0.07, 0.22, 10),
-        new THREE.MeshStandardMaterial({ color: 0x3a4416, emissive: 0x9aa830, emissiveIntensity: 0.45 })
+      // an industrial torch cell: dark casing, a hazard label band, terminal + charge LED
+      const casing = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.2, 18), darkPlastic);
+      const label = new THREE.Mesh(new THREE.CylinderGeometry(0.0535, 0.0535, 0.1, 18), labelYellow);
+      label.position.y = -0.01;
+      const stripe = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.054, 0.054, 0.016, 18),
+        new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.7 })
       );
-      obj.add(m);
+      stripe.position.y = 0.05;
+      const term = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.024, 0.03, 14), brass);
+      term.position.y = 0.115;
+      const led = new THREE.Mesh(
+        new THREE.SphereGeometry(0.013, 10, 10),
+        new THREE.MeshStandardMaterial({ color: 0x0a2a0a, emissive: 0x7bff3a, emissiveIntensity: 1.6 })
+      );
+      led.position.set(0, 0.02, 0.052);
+      obj.add(casing, label, stripe, term, led);
       addPedestal(x, z);
       baseY = PED_TOP + 0.12;
     } else if (it.kind === "bottles") {
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x1d3a22, emissive: 0x2a5532, emissiveIntensity: 0.35, roughness: 0.2
-      });
+      // proper glass bottles: body, tapered shoulder, neck, cap, paper label
+      const labelMat = new THREE.MeshStandardMaterial({ color: 0x8a7d5a, roughness: 0.9, side: THREE.DoubleSide });
       for (let i = 0; i < 2; i++) {
-        const b = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.3, 8), mat);
-        b.position.set(i * 0.18 - 0.09, 0, 0);
+        const b = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.054, 0.2, 16), glass);
+        body.position.y = 0.1;
+        const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.05, 0.06, 16), glass);
+        shoulder.position.y = 0.23;
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.07, 12), glass);
+        neck.position.y = 0.295;
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.023, 0.023, 0.026, 12), metal);
+        cap.position.y = 0.345;
+        const label = new THREE.Mesh(new THREE.CylinderGeometry(0.0515, 0.0555, 0.072, 16, 1, true), labelMat);
+        label.position.y = 0.09;
+        b.add(body, shoulder, neck, cap, label);
+        b.position.set(i * 0.15 - 0.075, 0, i ? 0.03 : -0.02);
+        b.rotation.y = rnd() * Math.PI;
         obj.add(b);
       }
       addPedestal(x, z);
-      baseY = PED_TOP + 0.16;
+      baseY = PED_TOP + 0.01; // bottles stand on their base on the crate
     } else if (it.kind === "note") {
+      const tex = makeNoteTexture(it.cx * 131 + it.cy * 7 + 3);
       const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.32, 0.42),
+        new THREE.PlaneGeometry(0.34, 0.44),
         new THREE.MeshStandardMaterial({
-          color: 0xb0a890, emissive: 0x665e48, emissiveIntensity: 0.3, side: THREE.DoubleSide
+          map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.28,
+          roughness: 0.96, side: THREE.DoubleSide
         })
       );
       m.rotation.x = -Math.PI / 2;        // laid flat, like dropped paper
@@ -528,16 +660,53 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
       addPedestal(x, z);
       baseY = PED_TOP + 0.015;
     } else if (it.kind === "panel") {
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.7, 1.3), metal);
-      body.position.set(0.85, 1.3, 0); // against east wall
-      const led = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), panelLed);
-      led.position.set(0.7, 1.95, -0.4);
-      const slots = new THREE.Mesh(
-        new THREE.BoxGeometry(0.1, 0.5, 0.8),
-        new THREE.MeshStandardMaterial({ color: 0x16181a, roughness: 0.9 })
+      // a breaker cabinet against the east wall (interior faces -x): switch banks,
+      // a dial gauge, conduit to the ceiling, and status LEDs
+      const cabMat = new THREE.MeshStandardMaterial({ color: 0x3a3d40, roughness: 0.55, metalness: 0.7 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.7, 1.3), cabMat);
+      body.position.set(0.86, 1.3, 0);
+      const recess = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 1.42, 1.0),
+        new THREE.MeshStandardMaterial({ color: 0x131517, roughness: 0.9 })
       );
-      slots.position.set(0.7, 1.25, 0);
-      obj.add(body, led, slots);
+      recess.position.set(0.7, 1.3, 0);
+      obj.add(body, recess);
+      // two columns of breaker switches with crooked little levers
+      const switchBody = new THREE.MeshStandardMaterial({ color: 0x202327, roughness: 0.7 });
+      const leverMat = new THREE.MeshStandardMaterial({ color: 0xc9ad48, roughness: 0.5 });
+      for (let col = 0; col < 2; col++) {
+        for (let row = 0; row < 6; row++) {
+          const zz = (col - 0.5) * 0.34;
+          const yy = 1.78 - row * 0.16;
+          const sw = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.16), switchBody);
+          sw.position.set(0.66, yy, zz);
+          const lever = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.05, 0.05), leverMat);
+          lever.position.set(0.63, yy + (row % 2 ? 0.03 : -0.03), zz);
+          obj.add(sw, lever);
+        }
+      }
+      // round dial gauge with a needle pinned over-range (dead power)
+      const gauge = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.12, 0.12, 0.04, 22),
+        new THREE.MeshStandardMaterial({ color: 0x0a0c0e, roughness: 0.3, metalness: 0.4 })
+      );
+      gauge.rotation.z = Math.PI / 2;
+      gauge.position.set(0.68, 0.66, 0.34);
+      const needle = new THREE.Mesh(
+        new THREE.BoxGeometry(0.012, 0.1, 0.008),
+        new THREE.MeshStandardMaterial({ color: 0xcc3322, emissive: 0xcc3322, emissiveIntensity: 0.5 })
+      );
+      needle.position.set(0.655, 0.69, 0.34);
+      needle.rotation.x = 0.7;
+      obj.add(gauge, needle);
+      // conduit rising to the ceiling
+      const conduit = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.0, 8), metal);
+      conduit.position.set(0.82, 2.25, 0.52);
+      obj.add(conduit);
+      // the main fault LED — kept on the panelLed material the Director toggles
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.05), panelLed);
+      led.position.set(0.66, 1.95, -0.42);
+      obj.add(led);
       baseY = 0;
     } else if (it.kind === "hatch") {
       // a sealed OVERHEAD escape bulkhead with a fixed ladder up to it — the manual
@@ -568,17 +737,81 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
       obj.traverse((m) => { m.castShadow = true; });
       baseY = 0;
     } else if (it.kind === "console") {
-      const cab = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.0, 0.7), metal);
+      const cabMat = new THREE.MeshStandardMaterial({ color: 0x34383b, roughness: 0.55, metalness: 0.7 });
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.0, 0.7), cabMat);
       cab.position.y = 0.5;
-      const deck = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.95), metal);
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.95), cabMat);
       deck.position.y = 1.02;
       deck.rotation.x = -0.12;
-      // the screen: dead red until the signal is restored (Director swaps it green)
+      obj.add(cab, deck);
+      // a worn keyboard tray with a grid of keys, on the operator (-z) side
+      const kbBase = new THREE.Mesh(
+        new THREE.BoxGeometry(0.82, 0.04, 0.3),
+        new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.82 })
+      );
+      kbBase.position.set(0, 1.075, -0.18);
+      kbBase.rotation.x = 0.12;
+      obj.add(kbBase);
+      const keyMat = new THREE.MeshStandardMaterial({ color: 0x44484c, roughness: 0.68 });
+      const keyGeo = new THREE.BoxGeometry(0.05, 0.022, 0.045);
+      for (let r = 0; r < 3; r++) {
+        for (let cc = 0; cc < 12; cc++) {
+          const k = new THREE.Mesh(keyGeo, keyMat);
+          k.position.set(-0.33 + cc * 0.06, 1.108 - r * 0.012, -0.1 - r * 0.058);
+          k.rotation.x = 0.12;
+          obj.add(k);
+        }
+      }
+      // recessed screen + bezel; dead red until the signal is restored (Director swaps green)
+      const bezel = new THREE.Mesh(
+        new THREE.BoxGeometry(0.86, 0.62, 0.06),
+        new THREE.MeshStandardMaterial({ color: 0x17191b, roughness: 0.6, metalness: 0.4 })
+      );
+      bezel.position.set(0, 1.5, -0.29);
+      bezel.rotation.x = -0.3;
       coreScreen = new THREE.MeshStandardMaterial({ color: 0x111416, emissive: 0x882017, emissiveIntensity: 0.9 });
       const screen = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.46, 0.04), coreScreen);
-      screen.position.set(0, 1.5, -0.28);
+      screen.position.set(0, 1.5, -0.26);
       screen.rotation.x = -0.3;
-      obj.add(cab, deck, screen);
+      obj.add(bezel, screen);
+      // a row of chunky buttons + status LEDs on the operator-facing (-z) cabinet face
+      const btnMat = new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.6 });
+      for (let i = 0; i < 5; i++) {
+        const b = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.02, 12), btnMat);
+        b.rotation.x = Math.PI / 2;
+        b.position.set(-0.42 + i * 0.1, 0.78, -0.36);
+        obj.add(b);
+      }
+      const ledColors = [0x7bff3a, 0xffb020, 0xff3020];
+      for (let i = 0; i < 3; i++) {
+        const led = new THREE.Mesh(
+          new THREE.SphereGeometry(0.016, 8, 8),
+          new THREE.MeshStandardMaterial({ color: 0x101010, emissive: ledColors[i], emissiveIntensity: 1.2 })
+        );
+        led.position.set(0.18 + i * 0.06, 0.78, -0.36);
+        obj.add(led);
+      }
+      // ventilation louvres along the operator-facing base
+      const ventMat = new THREE.MeshStandardMaterial({ color: 0x0a0c0d, roughness: 0.92 });
+      for (let i = 0; i < 4; i++) {
+        const v = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.016, 0.012), ventMat);
+        v.position.set(0, 0.32 - i * 0.06, -0.355);
+        obj.add(v);
+      }
+      // power conduit: two heavy cables drooping from the cabinet base into a floor duct
+      const cableMat = new THREE.MeshStandardMaterial({ color: 0x131210, roughness: 0.86 });
+      for (let i = 0; i < 2; i++) {
+        const ox = -0.2 + i * 0.4;
+        const curve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(ox, 0.32, 0.35),
+          new THREE.Vector3(ox * 1.1, 0.1, 0.52),
+          new THREE.Vector3(ox * 1.15, 0.04, 0.72),
+          new THREE.Vector3(ox * 1.15, 0.03, 0.95)
+        ]);
+        const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 18, 0.022, 7), cableMat);
+        tube.castShadow = true;
+        obj.add(tube);
+      }
       baseY = 0;
     }
     obj.position.set(x, baseY, z);

@@ -21,7 +21,7 @@ const exe = [
 
 const browser = await puppeteer.launch({
   executablePath: exe,
-  headless: "new",
+  headless: "shell", // old headless: renders the same but never steals window focus (see agent/lib.mjs)
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--autoplay-policy=no-user-gesture-required"]
 });
 const page = await browser.newPage();
@@ -187,7 +187,9 @@ await page.evaluate(() => {
 // the escape cutscene runs on game-time; under headless SwiftShader the dt-capped
 // clock advances ~3x slower than wall-time, so allow generous real-time headroom.
 const won = await page
-  .waitForFunction(() => !document.getElementById("win").classList.contains("hidden"), { timeout: 40000, polling: 100 })
+  // the escape cutscene runs on the dt-capped game clock; headless SwiftShader needs
+  // ~50s wall-time to play it out, so keep generous headroom (40s flaked here).
+  .waitForFunction(() => !document.getElementById("win").classList.contains("hidden"), { timeout: 75000, polling: 100 })
   .then(() => true).catch(() => false);
 check("win screen shows", won);
 await page.screenshot({ path: `${SHOTS}/e2e-win.png` });
