@@ -8,6 +8,19 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- boot loader: a "tuning the dead signal" splash that paints over the canvas
+       until the first frame is composited (faded out from main.ts) -->
+  <div id="boot-loader">
+    <div class="bl-static" aria-hidden="true"></div>
+    <div class="bl-core">
+      <div class="bl-ring"></div>
+      <div class="bl-brand">DEAD&nbsp;AIR</div>
+      <div class="bl-sub">Repeater&nbsp;4 · Sub-level Broadcast</div>
+      <div class="bl-bar"><div class="bl-bar-fill"></div></div>
+      <div class="bl-status">Establishing signal&hellip;</div>
+    </div>
+  </div>
+
   <div id="app"></div>
 
   <!-- in-game HUD -->
@@ -60,12 +73,26 @@
 
   <!-- screens -->
   <div id="title" class="screen">
+    <!-- procedural "dead signal" backdrop: drifting haze, TV static, a tuning
+         sweep and a flickering emergency vignette — all pure CSS, no assets -->
+    <div class="title-bg" aria-hidden="true">
+      <div class="tb-fog"></div>
+      <div class="tb-static"></div>
+      <div class="tb-scan"></div>
+      <div class="tb-sweep"></div>
+      <div class="tb-vignette"></div>
+    </div>
     <div class="screen-inner">
-      <h1>DEAD&nbsp;AIR</h1>
+      <div class="brand">
+        <h1>DEAD&nbsp;AIR</h1>
+        <div class="brand-rule"><span>Repeater 4 — Sub-level Broadcast</span></div>
+      </div>
       <p class="tagline">Repeater&nbsp;4 went silent. They sent you down to bring it back.</p>
       <div class="menu">
         <button id="btn-continue" class="hidden">CONTINUE</button>
         <button id="btn-start">DESCEND</button>
+        <button id="btn-options" class="ghost">OPTIONS</button>
+        <button id="btn-exit" class="ghost">EXIT GAME</button>
       </div>
       <p id="continue-beat" class="subnote"></p>
       <p class="hint">It hunts light first. Your torch is not your friend.</p>
@@ -80,15 +107,99 @@
   <div id="pause" class="screen hidden">
     <div class="screen-inner">
       <h2>PAUSED</h2>
-      <div id="quality">
-        <span class="q-label">GRAPHICS</span>
-        <span class="q-opt" data-q="low">LOW</span>
-        <span class="q-opt" data-q="medium">MEDIUM</span>
-        <span class="q-opt" data-q="high">HIGH</span>
-      </div>
       <div class="menu">
         <button id="btn-resume">RESUME</button>
+        <button id="btn-pause-options" class="ghost">OPTIONS</button>
         <button id="btn-title" class="ghost">QUIT TO TITLE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- options / settings -->
+  <div id="options" class="screen hidden">
+    <div class="screen-inner opts">
+      <h2>OPTIONS</h2>
+
+      <div class="opt-section">DISPLAY</div>
+      <div class="opt-row">
+        <span class="opt-name">Display mode</span>
+        <div class="seg" id="opt-fullscreen">
+          <span class="seg-opt" data-v="0">WINDOWED</span>
+          <span class="seg-opt" data-v="1">FULLSCREEN</span>
+        </div>
+        <span class="opt-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Resolution</span>
+        <div class="seg" id="opt-res">
+          <span class="seg-opt" data-v="0.5">50%</span>
+          <span class="seg-opt" data-v="0.75">75%</span>
+          <span class="seg-opt" data-v="1">100%</span>
+        </div>
+        <span class="opt-readout" id="res-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Graphics</span>
+        <div class="seg" id="opt-quality">
+          <span class="seg-opt" data-v="low">LOW</span>
+          <span class="seg-opt" data-v="medium">MEDIUM</span>
+          <span class="seg-opt" data-v="high">HIGH</span>
+        </div>
+        <span class="opt-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Brightness</span>
+        <input type="range" class="slider" id="opt-brightness" min="0.7" max="1.4" step="0.01" />
+        <span class="opt-readout" id="brightness-readout"></span>
+      </div>
+
+      <div class="opt-section">CONTROLS &amp; AUDIO</div>
+      <div class="opt-row">
+        <span class="opt-name">Field of view</span>
+        <input type="range" class="slider" id="opt-fov" min="60" max="90" step="1" />
+        <span class="opt-readout" id="fov-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Look sensitivity</span>
+        <input type="range" class="slider" id="opt-sens" min="0.4" max="2.5" step="0.05" />
+        <span class="opt-readout" id="sens-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Invert look Y</span>
+        <div class="seg" id="opt-invert">
+          <span class="seg-opt" data-v="0">OFF</span>
+          <span class="seg-opt" data-v="1">ON</span>
+        </div>
+        <span class="opt-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Master volume</span>
+        <input type="range" class="slider" id="opt-volume" min="0" max="1" step="0.01" />
+        <span class="opt-readout" id="volume-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Music</span>
+        <input type="range" class="slider" id="opt-vol-music" min="0" max="1" step="0.01" />
+        <span class="opt-readout" id="vol-music-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Ambience</span>
+        <input type="range" class="slider" id="opt-vol-ambient" min="0" max="1" step="0.01" />
+        <span class="opt-readout" id="vol-ambient-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Creature</span>
+        <input type="range" class="slider" id="opt-vol-creature" min="0" max="1" step="0.01" />
+        <span class="opt-readout" id="vol-creature-readout"></span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-name">Broadcast voice</span>
+        <input type="range" class="slider" id="opt-vol-voice" min="0" max="1" step="0.01" />
+        <span class="opt-readout" id="vol-voice-readout"></span>
+      </div>
+
+      <div class="menu">
+        <button id="btn-opts-back">BACK</button>
       </div>
     </div>
   </div>
@@ -109,6 +220,18 @@
       <h2 class="green">SURFACE</h2>
       <p class="story" id="win-text"></p>
       <button id="btn-again">PLAY AGAIN</button>
+    </div>
+  </div>
+
+  <!-- shown only when EXIT can't close the host (a normal browser tab) -->
+  <div id="exit" class="screen hidden">
+    <div class="title-bg" aria-hidden="true">
+      <div class="tb-static"></div>
+      <div class="tb-vignette"></div>
+    </div>
+    <div class="screen-inner">
+      <h2 class="red">SIGNAL LOST</h2>
+      <p class="story">Repeater&nbsp;4 is silent again.<br />You can close this window.</p>
     </div>
   </div>
 

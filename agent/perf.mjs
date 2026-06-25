@@ -57,9 +57,8 @@ async function health(page, beat) {
     chk(finite(g.player.battery) && g.player.battery >= 0 && g.player.battery <= 1.001, "battery out of [0,1]");
 
     // 2. actors inside the level grid (caught a teleport-through-wall bug class).
-    // Grid is 54x54 cells * CELL(2m) ≈ 108m; allow a small margin.
-    const EXTENT = 116;
-    const inWorld = (x, z) => x > -4 && z > -4 && x < EXTENT && z < EXTENT;
+    // Grid is 64x84 cells * CELL(2m) = 128m x 168m; allow a small margin.
+    const inWorld = (x, z) => x > -4 && z > -4 && x < 132 && z < 172;
     chk(inWorld(g.player.x, g.player.z), "player outside world bounds");
 
     // 3. the creature mesh hasn't sunk through the floor or flown off

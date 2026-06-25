@@ -30,6 +30,11 @@ export class Player {
 
   frozen = false; // director can lock input
 
+  /** mouse-look radians per pixel of movement, scaled by the sensitivity option */
+  lookSpeed = 0.0022;
+  /** invert vertical look (Options → INVERT LOOK Y) */
+  invertY = false;
+
   private bobT = 0;
   bobOffset = 0;
   /** camera roll from strafing, radians */
@@ -49,8 +54,8 @@ export class Player {
   update(dt: number): void {
     const input = this.input;
     if (!this.frozen) {
-      this.yaw -= input.mouseDX * 0.0022;
-      this.pitch -= input.mouseDY * 0.0022;
+      this.yaw -= input.mouseDX * this.lookSpeed;
+      this.pitch -= input.mouseDY * this.lookSpeed * (this.invertY ? -1 : 1);
       this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
     }
 

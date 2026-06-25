@@ -1,10 +1,15 @@
+import "@fontsource/cinzel/600.css";
+import "@fontsource/cinzel/700.css";
+import "@fontsource/oswald/300.css";
+import "@fontsource/oswald/500.css";
+import "@fontsource/oswald/600.css";
 import * as THREE from "three";
 import { Input } from "./core/Input";
 import { AudioFX } from "./core/AudioFX";
 import { Post } from "./core/Post";
 import { Perf } from "./core/Perf";
 import { Assets } from "./core/Assets";
-import { Save } from "./core/Save";
+import { Save, type Settings } from "./core/Save";
 import { Level } from "./world/Level";
 import { buildWorld } from "./world/Builder";
 import { PLAYER_START, STALKER_START, ITEMS } from "./world/data";
@@ -45,6 +50,7 @@ window.addEventListener("resize", () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   post.setSize(window.innerWidth, window.innerHeight);
+  if (!optEl("options").classList.contains("hidden")) updateResReadout();
 });
 
 // ---------- world ----------
@@ -300,8 +306,8 @@ function findTarget(): InteractTarget | null {
   let best: InteractTarget | null = null;
   let bestD = Infinity;
   for (const it of ITEMS) {
-    const h = world.items.get(it.id)!;
-    if (h.taken) continue;
+    const h = world.items.get(it.id);
+    if (!h || h.taken) continue;
     const [tx, tz] = director.cellWorld(it.cx, it.cy);
     const dx = tx - player.x;
     const dz = tz - player.z;
@@ -317,7 +323,7 @@ function findTarget(): InteractTarget | null {
     const dx = tx - player.x;
     const dz = tz - player.z;
     const d = Math.hypot(dx, dz);
-    if (d > 2.2) continue;
+    if (d > 2.2 || d < 0.01) continue; // guard the dx/d normalize below
     if ((dx / d) * fx_ + (dz / d) * fz_ < 0.3) continue;
     if (d < bestD) { bestD = d; best = { type: "door", id: door.def.id }; }
   }
@@ -408,6 +414,7 @@ function clearBottles(): void {
 
 function newGame(): void {
   Save.clear();
+  applyFullscreenPref(); // honor the saved display-mode preference (this is a user gesture)
   fx.init();
   hud.showScreen(null);
   hud.show();
@@ -421,6 +428,7 @@ function newGame(): void {
 function continueGame(): void {
   const save = Save.load();
   if (!save) { newGame(); return; }
+  applyFullscreenPref();
   fx.init();
   // wipe transient overlays / projectiles so nothing carries over
   clearBottles();
@@ -441,6 +449,7 @@ function continueGame(): void {
 /** exit to the title screen in-place (no reload); CONTINUE then resumes from the
  *  last auto-saved checkpoint. Used by both the pause and death "quit" buttons. */
 function quitToTitle(): void {
+  flushSave(); // keep the ground gained since the last checkpoint
   state = "over";
   input.enabled = false;
   player.frozen = true;
@@ -455,11 +464,46 @@ function quitToTitle(): void {
   hud.showScreen("title");
 }
 
+/** Quit the whole game. In the Electron standalone window `window.close()`
+ *  closes the BrowserWindow (→ app.quit()); in a normal browser tab the host
+ *  won't let script close it, so fall back to a "signal lost" farewell. */
+function exitGame(): void {
+  const isElectron = /electron/i.test(navigator.userAgent);
+  flushSave(); // persist progress before the window goes
+  fx.setVolume(0); // silence any ambient before we go
+  if (document.pointerLockElement) document.exitPointerLock();
+  window.close();
+  if (!isElectron) {
+    // a tab opened by the user can't be closed by script — show the farewell.
+    hud.hide();
+    for (const s of ["title", "pause", "options", "dead", "win"]) {
+      document.getElementById(s)?.classList.add("hidden");
+    }
+    document.getElementById("exit")?.classList.remove("hidden");
+  }
+}
+
+/** flush live position/progress to disk so quitting or closing never loses ground
+ *  between sparse checkpoints (localStorage itself already survives an app restart).
+ *  No-op unless actually in play, and Director.snapshot() refuses unsafe moments. */
+function flushSave(): void {
+  if (state !== "playing" && state !== "paused") return;
+  const snap = director.snapshot();
+  if (snap) Save.write(snap);
+}
+// last-ditch saves: tab/app close (pagehide is the reliable one; beforeunload backs
+// it up) and backgrounding. Backgrounding also suspends the audio clock.
+window.addEventListener("pagehide", flushSave);
+window.addEventListener("beforeunload", flushSave);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { flushSave(); fx.suspend(); }
+  else fx.resume();
+});
+
 document.getElementById("btn-start")!.addEventListener("click", newGame);
 document.getElementById("btn-continue")!.addEventListener("click", continueGame);
-document.getElementById("btn-resume")!.addEventListener("click", () => {
-  if (state === "paused") input.requestLock();
-});
+document.getElementById("btn-exit")!.addEventListener("click", exitGame);
+document.getElementById("btn-resume")!.addEventListener("click", () => resumeGame());
 document.getElementById("btn-title")!.addEventListener("click", quitToTitle);
 document.getElementById("btn-deadquit")!.addEventListener("click", quitToTitle);
 // death → continue from checkpoint (in-place); win → fresh title
@@ -471,42 +515,41 @@ window.addEventListener("keydown", (e) => {
   if (cine.active && cine.skippable && !e.repeat) cine.skip();
 });
 
-// graphics quality selector (persisted)
-const qOpts = Array.from(document.querySelectorAll<HTMLElement>("#quality .q-opt"));
-function refreshQuality(): void {
-  const q = post.getQuality();
-  for (const el of qOpts) el.classList.toggle("active", el.dataset.q === q);
+// ---------- pause / resume ----------
+// Escape is the menu key. In fullscreen the keyboard-lock above feeds the keypress
+// here (instead of dropping fullscreen); windowed, the browser also released pointer
+// lock — pointerlockchange handles that path and this lets a second Escape resume.
+function pauseGame(): void {
+  // never raise the menu over the kill-cam: state is still "playing" during the
+  // ~2s death animation, so guard on director.dying too
+  if (state !== "playing" || director.dying) return;
+  if (hud.noteOpen) hud.closeNote();
+  state = "paused";
+  input.enabled = false;
+  player.frozen = director.over;
+  fx.setPaused(true);
+  if (document.pointerLockElement) document.exitPointerLock();
+  hud.showScreen("pause");
 }
-for (const el of qOpts) {
-  el.addEventListener("click", () => {
-    const q = el.dataset.q as "low" | "medium" | "high";
-    post.lockQuality(q);
-    Save.saveSettings({ quality: q });
-    refreshQuality();
-  });
+function resumeGame(): void {
+  if (state !== "paused") return;
+  input.requestLock(); // pointerlockchange completes the resume (and un-ducks audio)
 }
-// apply a previously-chosen graphics tier (unless a ?lowfx/?nofx override is set)
-{
-  const params = new URLSearchParams(location.search);
-  if (!params.has("nofx") && !params.has("lowfx")) {
-    const s = Save.loadSettings();
-    if (s.quality) post.lockQuality(s.quality);
-  }
-}
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Escape" && e.key !== "Escape") return;
+  if (state === "playing") pauseGame();
+  else if (state === "paused") resumeGame();
+});
 
 document.addEventListener("pointerlockchange", () => {
   if (state === "cinematic") return; // never pause mid-cutscene
   if (state === "playing" && !input.locked) {
-    if (hud.noteOpen) hud.closeNote();
-    player.frozen = director.over;
-    state = "paused";
-    input.enabled = false;
-    refreshQuality();
-    hud.showScreen("pause");
+    pauseGame(); // involuntary unlock (alt-tab, OS switch, windowed Esc) → pause
   } else if (state === "paused" && input.locked) {
     state = "playing";
     input.enabled = true;
     player.frozen = director.over;
+    fx.setPaused(false);
     hud.showScreen(null);
   }
 });
@@ -531,7 +574,9 @@ director.onWin = (text) => {
 
 // ---------- camera feel ----------
 let shake = 0;
-let fovCurrent = 72;
+let autosaveT = 25; // seconds of play between silent background autosaves
+let baseFov = 72; // player-chosen field of view (Options → FIELD OF VIEW)
+let fovCurrent = baseFov;
 stalker.onBash = () => {
   const d = Math.hypot(stalker.x - player.x, stalker.z - player.z);
   shake = Math.max(shake, 0.85 / (1 + d * 0.25));
@@ -546,6 +591,212 @@ function setFov(target: number): void {
     camera.updateProjectionMatrix();
   }
 }
+
+// ---------- options / settings menu ----------
+// A real-game options screen reachable from the title and the pause menu: display
+// mode (fullscreen), internal render resolution, graphics tier, brightness, FOV,
+// look sensitivity / invert, and master volume. Every control applies live and
+// persists to localStorage; the pause/options screens are translucent so display
+// tweaks preview against the frozen scene behind them.
+const EXPOSURE_BASE = 1.35; // renderer.toneMappingExposure at 100% brightness
+const LOOK_BASE = 0.0022; // Player.lookSpeed at 1.0× sensitivity
+const DEF: Required<Pick<Settings, "renderScale" | "brightness" | "fov" | "sensitivity" | "volume" | "volAmbient" | "volCreature" | "volVoice" | "volMusic">> =
+  { renderScale: 1, brightness: 1, fov: 72, sensitivity: 1, volume: 1, volAmbient: 1, volCreature: 1, volVoice: 1, volMusic: 1 };
+
+let settings: Settings = Save.loadSettings();
+const fxForced = (() => {
+  const p = new URLSearchParams(location.search);
+  return p.has("nofx") || p.has("lowfx");
+})();
+
+function persist(patch: Partial<Settings>): void {
+  settings = { ...settings, ...patch };
+  Save.saveSettings(settings);
+}
+
+function isFullscreen(): boolean {
+  return !!document.fullscreenElement;
+}
+
+/** push the current `settings` into every live system */
+function applySettings(): void {
+  if (!fxForced && settings.quality) post.lockQuality(settings.quality);
+  post.setRenderScale(settings.renderScale ?? DEF.renderScale);
+  renderer.toneMappingExposure = EXPOSURE_BASE * (settings.brightness ?? DEF.brightness);
+  baseFov = settings.fov ?? DEF.fov;
+  fovCurrent = baseFov;
+  camera.fov = baseFov;
+  camera.updateProjectionMatrix();
+  player.lookSpeed = LOOK_BASE * (settings.sensitivity ?? DEF.sensitivity);
+  player.invertY = !!settings.invertY;
+  fx.setVolume(settings.volume ?? DEF.volume);
+  fx.setBusVolume("ambient", settings.volAmbient ?? DEF.volAmbient);
+  fx.setBusVolume("creature", settings.volCreature ?? DEF.volCreature);
+  fx.setBusVolume("voice", settings.volVoice ?? DEF.volVoice);
+  fx.setBusVolume("music", settings.volMusic ?? DEF.volMusic);
+}
+
+// Keyboard Lock API (Chromium/Electron, secure context): while in fullscreen,
+// capture Escape so it raises the in-game menu instead of dropping fullscreen. The
+// browser still lets the player *hold* Escape to force-exit. Acquired/released from
+// the fullscreenchange handler so every entry path (button, F11, saved pref) is covered.
+interface KeyboardLock { lock?: (keys?: string[]) => Promise<void>; unlock?: () => void }
+function keyboardApi(): KeyboardLock | undefined {
+  return (navigator as unknown as { keyboard?: KeyboardLock }).keyboard;
+}
+function syncKeyboardLock(): void {
+  const kb = keyboardApi();
+  try {
+    if (isFullscreen()) void kb?.lock?.(["Escape"]);
+    else kb?.unlock?.();
+  } catch { /* unsupported / not permitted — Esc falls back to native behaviour */ }
+}
+
+function setFullscreen(on: boolean): void {
+  try {
+    if (on && !isFullscreen()) void document.documentElement.requestFullscreen?.();
+    else if (!on && isFullscreen()) void document.exitFullscreen?.();
+  } catch { /* fullscreen not permitted in this context */ }
+}
+
+function applyFullscreenPref(): void {
+  if (settings.fullscreen && !isFullscreen()) {
+    try { void document.documentElement.requestFullscreen?.(); } catch { /* ignore */ }
+  }
+}
+
+// --- DOM control helpers ---
+const optEl = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
+function wireSeg(id: string, onPick: (v: string) => void): void {
+  optEl(id).querySelectorAll<HTMLElement>(".seg-opt").forEach((opt) => {
+    opt.addEventListener("click", () => onPick(opt.dataset.v!));
+  });
+}
+function setSeg(id: string, v: string): void {
+  optEl(id).querySelectorAll<HTMLElement>(".seg-opt").forEach((opt) => {
+    opt.classList.toggle("active", opt.dataset.v === v);
+  });
+}
+function updateResReadout(): void {
+  const epr = post.effectivePixelRatio();
+  const w = Math.round(window.innerWidth * epr);
+  const h = Math.round(window.innerHeight * epr);
+  optEl("res-readout").textContent = `${w} × ${h}`;
+}
+
+function refreshOptions(): void {
+  setSeg("opt-fullscreen", isFullscreen() ? "1" : "0");
+  setSeg("opt-res", String(settings.renderScale ?? DEF.renderScale));
+  setSeg("opt-quality", post.getQuality() === "off" ? "low" : post.getQuality());
+  setSeg("opt-invert", settings.invertY ? "1" : "0");
+  optEl<HTMLInputElement>("opt-brightness").value = String(settings.brightness ?? DEF.brightness);
+  optEl<HTMLInputElement>("opt-fov").value = String(settings.fov ?? DEF.fov);
+  optEl<HTMLInputElement>("opt-sens").value = String(settings.sensitivity ?? DEF.sensitivity);
+  optEl<HTMLInputElement>("opt-volume").value = String(settings.volume ?? DEF.volume);
+  optEl("brightness-readout").textContent = `${Math.round((settings.brightness ?? DEF.brightness) * 100)}%`;
+  optEl("fov-readout").textContent = String(settings.fov ?? DEF.fov);
+  optEl("sens-readout").textContent = `${(settings.sensitivity ?? DEF.sensitivity).toFixed(2)}×`;
+  optEl("volume-readout").textContent = `${Math.round((settings.volume ?? DEF.volume) * 100)}%`;
+  optEl<HTMLInputElement>("opt-vol-music").value = String(settings.volMusic ?? DEF.volMusic);
+  optEl<HTMLInputElement>("opt-vol-ambient").value = String(settings.volAmbient ?? DEF.volAmbient);
+  optEl<HTMLInputElement>("opt-vol-creature").value = String(settings.volCreature ?? DEF.volCreature);
+  optEl<HTMLInputElement>("opt-vol-voice").value = String(settings.volVoice ?? DEF.volVoice);
+  optEl("vol-music-readout").textContent = `${Math.round((settings.volMusic ?? DEF.volMusic) * 100)}%`;
+  optEl("vol-ambient-readout").textContent = `${Math.round((settings.volAmbient ?? DEF.volAmbient) * 100)}%`;
+  optEl("vol-creature-readout").textContent = `${Math.round((settings.volCreature ?? DEF.volCreature) * 100)}%`;
+  optEl("vol-voice-readout").textContent = `${Math.round((settings.volVoice ?? DEF.volVoice) * 100)}%`;
+  updateResReadout();
+}
+
+// DISPLAY
+wireSeg("opt-fullscreen", (v) => setFullscreen(v === "1"));
+wireSeg("opt-res", (v) => {
+  const s = parseFloat(v);
+  post.setRenderScale(s);
+  persist({ renderScale: s });
+  setSeg("opt-res", v);
+  updateResReadout();
+});
+wireSeg("opt-quality", (v) => {
+  post.lockQuality(v as "low" | "medium" | "high");
+  persist({ quality: v as "low" | "medium" | "high" });
+  setSeg("opt-quality", v);
+  updateResReadout(); // tier changes the internal render scale
+});
+wireSeg("opt-invert", (v) => {
+  player.invertY = v === "1";
+  persist({ invertY: v === "1" });
+  setSeg("opt-invert", v);
+});
+optEl<HTMLInputElement>("opt-brightness").addEventListener("input", (e) => {
+  const b = parseFloat((e.target as HTMLInputElement).value);
+  renderer.toneMappingExposure = EXPOSURE_BASE * b;
+  optEl("brightness-readout").textContent = `${Math.round(b * 100)}%`;
+  persist({ brightness: b });
+});
+optEl<HTMLInputElement>("opt-fov").addEventListener("input", (e) => {
+  const f = parseFloat((e.target as HTMLInputElement).value);
+  baseFov = f;
+  optEl("fov-readout").textContent = String(f);
+  persist({ fov: f });
+});
+optEl<HTMLInputElement>("opt-sens").addEventListener("input", (e) => {
+  const s = parseFloat((e.target as HTMLInputElement).value);
+  player.lookSpeed = LOOK_BASE * s;
+  optEl("sens-readout").textContent = `${s.toFixed(2)}×`;
+  persist({ sensitivity: s });
+});
+optEl<HTMLInputElement>("opt-volume").addEventListener("input", (e) => {
+  const v = parseFloat((e.target as HTMLInputElement).value);
+  fx.setVolume(v);
+  optEl("volume-readout").textContent = `${Math.round(v * 100)}%`;
+  persist({ volume: v });
+});
+optEl<HTMLInputElement>("opt-vol-music").addEventListener("input", (e) => {
+  const v = parseFloat((e.target as HTMLInputElement).value);
+  fx.setBusVolume("music", v);
+  optEl("vol-music-readout").textContent = `${Math.round(v * 100)}%`;
+  persist({ volMusic: v });
+});
+optEl<HTMLInputElement>("opt-vol-ambient").addEventListener("input", (e) => {
+  const v = parseFloat((e.target as HTMLInputElement).value);
+  fx.setBusVolume("ambient", v);
+  optEl("vol-ambient-readout").textContent = `${Math.round(v * 100)}%`;
+  persist({ volAmbient: v });
+});
+optEl<HTMLInputElement>("opt-vol-creature").addEventListener("input", (e) => {
+  const v = parseFloat((e.target as HTMLInputElement).value);
+  fx.setBusVolume("creature", v);
+  optEl("vol-creature-readout").textContent = `${Math.round(v * 100)}%`;
+  persist({ volCreature: v });
+});
+optEl<HTMLInputElement>("opt-vol-voice").addEventListener("input", (e) => {
+  const v = parseFloat((e.target as HTMLInputElement).value);
+  fx.setBusVolume("voice", v);
+  optEl("vol-voice-readout").textContent = `${Math.round(v * 100)}%`;
+  persist({ volVoice: v });
+});
+
+// fullscreen can change outside our buttons (F11 / Esc) — keep UI + pref in sync,
+// and acquire/release the Escape keyboard-lock so the menu key never drops fullscreen
+document.addEventListener("fullscreenchange", () => {
+  setSeg("opt-fullscreen", isFullscreen() ? "1" : "0");
+  persist({ fullscreen: isFullscreen() });
+  syncKeyboardLock();
+});
+
+// open / close — remembers whether we came from the title or the pause menu
+let optionsReturn: "title" | "pause" = "title";
+function openOptions(from: "title" | "pause"): void {
+  optionsReturn = from;
+  refreshOptions();
+  hud.showScreen("options");
+}
+optEl("btn-options").addEventListener("click", () => openOptions("title"));
+optEl("btn-pause-options").addEventListener("click", () => openOptions("pause"));
+optEl("btn-opts-back").addEventListener("click", () => hud.showScreen(optionsReturn));
+
+applySettings();
 
 // ---------- main loop ----------
 const clock = new THREE.Clock();
@@ -610,6 +861,14 @@ function frame(): void {
     hud.stamina(player.stamina, player.exhausted);
     hud.update(dt);
 
+    // silent periodic autosave so an unexpected close keeps recent progress
+    autosaveT -= dt;
+    if (autosaveT <= 0) {
+      autosaveT = 25;
+      const snap = director.snapshot();
+      if (snap) Save.write(snap);
+    }
+
     // wayfinding
     wayfinder.setObjective(director.objectiveTarget, director.objectiveLabel);
     wayfinder.setHidden(director.chase || director.over);
@@ -649,7 +908,7 @@ function frame(): void {
       camera.rotation.z += (Math.random() - 0.5) * shake * 0.03;
       shake = Math.max(0, shake - dt * 1.5);
     }
-    const fovTarget = director.dying ? 54 : player.sprinting && player.moving ? 78 : 72;
+    const fovTarget = director.dying ? baseFov - 18 : player.sprinting && player.moving ? baseFov + 6 : baseFov;
     setFov(fovTarget);
   }
 
@@ -683,6 +942,15 @@ renderer.compile(scene, camera);
 post.warmup();
 frame();
 
+// fade the boot loader out once the first frame is composited and the title is up
+{
+  const bootLoader = document.getElementById("boot-loader");
+  setTimeout(() => {
+    bootLoader?.classList.add("done");
+    setTimeout(() => bootLoader?.remove(), 1000);
+  }, 1100);
+}
+
 // ---------- debug / automated-test scenario system ----------
 // Lets tests (and manual debugging) "cut to" a named scenario deterministically —
 // no need to play through. Each scenario sets up the world state for that beat so
@@ -713,35 +981,40 @@ function dbgPlace(cx: number, cy: number, yaw = Math.PI, torch = true): void {
   player.battery = 1;
 }
 const SCENARIOS: Record<string, () => void> = {
-  // ---- normal flow beats ----
-  arrival: () => { dbgPlay(); dbgPlace(26, 16, Math.PI); },
-  maintenance: () => { dbgPlay(); dbgPlace(8, 17, 1.6); },           // floating-object / fuse-A area
+  // ---- normal flow beats (new hub-and-spoke map) ----
+  arrival: () => { dbgPlay(); dbgPlace(31, 13, Math.PI); },          // arrival hall
+  maintenance: () => { dbgPlay(); dbgPlace(8, 33, Math.PI / 2); },   // fuse-A area, facing the bench
   "first-sighting": () => {                                          // build-up payoff: facing the first monster
     dbgPlay();
     director.armSighting();                                          // skip the build-up gate for the cut
-    const [sx, sz] = level.cellCenter(44, 14);
-    stalker.setPos(sx, sz); stalker.state = "dormant"; stalker.setCrouchPose(1); stalker.faceToward(44 * 2 + 1, 24 * 2 + 1);
-    dbgPlace(44, 24, 0);                                             // stepping onto the platform triggers C2
+    const [sx, sz] = level.cellCenter(58, 39);
+    stalker.setPos(sx, sz); stalker.state = "dormant"; stalker.setCrouchPose(1); stalker.faceToward(54 * 2 + 1, 32 * 2 + 1);
+    dbgPlace(54, 32, -Math.PI / 2);                                  // stepping onto the platform triggers C2
   },
-  "power-on": () => { dbgPlay(); director.debugPower(); dbgPlace(43, 5, -1.57); },
-  archive: () => { dbgPlay(); director.debugPower(); dbgPlace(23, 39, 0); }, // the wall of faces (reveal)
-  core: () => { dbgPlay(); director.debugPower(); dbgPlace(20, 46, Math.PI); },
+  "power-on": () => { dbgPlay(); director.debugPower(); dbgPlace(59, 18, -Math.PI / 2); },
+  archive: () => { dbgPlay(); director.debugPower(); dbgPlace(28, 61, 0); }, // the wall of faces (reveal)
+  core: () => { dbgPlay(); director.debugPower(); dbgPlace(22, 71, Math.PI / 2); },
   chase: () => {                                                    // live final-chase danger feedback
     dbgPlay(); director.debugArmChase();
-    const [sx, sz] = level.cellCenter(26, 13);
-    stalker.setPos(sx, sz); stalker.faceToward(26 * 2 + 1, 16 * 2 + 1); stalker.frozen = true;
-    dbgPlace(26, 16, Math.PI);
+    const [sx, sz] = level.cellCenter(31, 29);
+    stalker.setPos(sx, sz); stalker.faceToward(31 * 2 + 1, 33 * 2 + 1); stalker.frozen = true;
+    dbgPlace(31, 33, 0);
   },
   creature: () => {                                                 // the Tallyman right in front, torch-lit
-    dbgPlay(); dbgPlace(26, 19, 0);
+    dbgPlay(); dbgPlace(31, 32, 0);
     const fwx = -Math.sin(player.yaw), fwz = -Math.cos(player.yaw);
     stalker.setPos(player.x + fwx * 3.2, player.z + fwz * 3.2);
     stalker.faceToward(player.x, player.z);
     stalker.state = "chase"; stalker.finalChase = true; stalker.setCrouchPose(0);
     stalker.onKill = () => {};                                       // don't kill while inspecting
   },
-  escape: () => { dbgPlay(); dbgPlace(24, 4, Math.PI); director.debugEscape(); }, // ending reveal (313)
-  death: () => { dbgPlay(); dbgPlace(26, 16, Math.PI); stalker.activate(); stalker.setPos(player.x + 0.4, player.z); }
+  escape: () => { dbgPlay(); dbgPlace(28, 5, Math.PI); director.debugEscape(); }, // ending reveal (313)
+  death: () => { dbgPlay(); dbgPlace(31, 33, Math.PI); stalker.activate(); stalker.setPos(player.x + 0.4, player.z); },
+  // ---- the four place-gated visual false-scares (frozen mid-reveal for capture) ----
+  "scare-hang": () => { dbgPlay(); dbgPlace(5, 38, Math.PI); director.debugScare("sc_hang"); },
+  "scare-dart": () => { dbgPlay(); dbgPlace(47, 32, -Math.PI / 2); director.debugScare("sc_dart"); },
+  "scare-face": () => { dbgPlay(); dbgPlace(58, 30, -Math.PI / 2); director.debugScare("sc_face"); },
+  "scare-drop": () => { dbgPlay(); dbgPlace(30, 45, Math.PI); director.debugScare("sc_drop"); }
 };
 
 declare global {

@@ -11,6 +11,7 @@ npm run dev          # Vite dev server (default port 5173) with hot-reload
 npm run typecheck    # tsc --noEmit — the only static gate; run after any TS change
 npm run build        # typecheck + vite build → dist/
 npm run standalone   # build, then launch in an Electron desktop window
+npm run exe          # build, then package a single shareable portable .exe → release/DEAD-AIR-<ver>.exe
 npm run assets       # one-time: fetch CC0 textures/models (git-ignored; game works without them)
 node scripts/map.mjs # render + flood-fill connectivity-check the level — NO server/build needed
 ```

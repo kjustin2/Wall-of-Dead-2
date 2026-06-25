@@ -55,8 +55,8 @@ const idle = () => page.waitForFunction(() => !window.__game.cine.active, { time
 await beginRun();
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 27 * 2 + 1;        // work-order note is at cell (27,13)
-  g.player.z = 13 * 2 + 1 + 2;    // 2 m south of it
+  g.player.x = 31 * 2 + 1;        // work-order note is at cell (31,16)
+  g.player.z = 16 * 2 + 1 + 2;    // 2 m south of it
   g.player.yaw = 0;               // forward = -z = toward the note
   g.player.pitch = 0;
   g.player.lightOn = true;
@@ -94,16 +94,16 @@ const routes = await page.evaluate(() => {
   const L = window.__game.level;
   const P = (a, b) => L.findPath(a[0], a[1], b[0], b[1], true) !== null;
   const out = {
-    startToFuseA: P([26, 5], [9, 16]),
-    startToFuseB: P([26, 5], [47, 24]),
-    startToRack: P([26, 5], [46, 4]),
-    rackToHatch: P([46, 4], [24, 4]),
-    subLevelInternallyWalkable: P([26, 33], [20, 46]),
+    startToFuseA: P([31, 6], [6, 33]),
+    startToFuseB: P([31, 6], [58, 38]),
+    startToRack: P([31, 6], [60, 18]),
+    rackToHatch: P([60, 18], [28, 4]),
+    subLevelInternallyWalkable: P([30, 55], [20, 71]),
     // the locked service stair must block the concourse->sublevel shortcut pre-power
-    stairLockedPrePower: L.findPath(26, 17, 26, 30, false) === null
+    stairLockedPrePower: L.findPath(30, 32, 30, 55, false) === null
   };
   L.door("d_stair").locked = false;
-  out.coreToHatchEscape = P([20, 46], [24, 4]);
+  out.coreToHatchEscape = P([20, 71], [28, 4]);
   L.door("d_stair").locked = true; // restore the gating
   return out;
 });
@@ -126,8 +126,8 @@ check("fuse B picked, stalker wakes", r.fuses === 2 && r.stalker !== "dormant");
 // refit at the rack -> power on cutscene -> service stair unlocks, no chase yet
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 46 * 2 + 1;
-  g.player.z = 4 * 2 + 1;
+  g.player.x = 59 * 2 + 1;
+  g.player.z = 18 * 2 + 1;
   g.director.interact({ type: "item", id: "panel" });
 });
 const stairUnlocked = await page
@@ -143,7 +143,7 @@ check("no chase / broadcast yet (must reach the core)", r.chase === false && r.b
 await page.evaluate(() => {
   const g = window.__game;
   g.player.x = 20 * 2 + 1;
-  g.player.z = 46 * 2 + 1;
+  g.player.z = 71 * 2 + 1;
   g.director.interact({ type: "item", id: "console" });
 });
 const chaseOk = await page
@@ -160,10 +160,10 @@ await page.evaluate(() => {
   const g = window.__game;
   const door = g.level.door("d_lobby");
   door.targetOpen = false;
-  const [sx, sz] = g.level.cellCenter(26, 15);   // concourse side, behind the door
+  const [sx, sz] = g.level.cellCenter(31, 21);   // lobby side, behind the fire door
   g.stalker.setPos(sx, sz);
   g.stalker.startFinalChase();
-  g.player.x = 26 * 2 + 1;                        // player up in the shaft head
+  g.player.x = 31 * 2 + 1;                        // player up in the shaft head
   g.player.z = 5 * 2 + 1;
 });
 const bashed = await page
@@ -178,10 +178,10 @@ await page.evaluate(() => {
   const g = window.__game;
   g.director.power = true;
   g.director.broadcast = true; // signal already restored; the hatch will release
-  g.player.x = 24 * 2 + 1;
+  g.player.x = 28 * 2 + 1;
   g.player.z = 4 * 2 + 1;
   g.stalker.frozen = true;
-  g.stalker.setPos(46 * 2 + 1, 24 * 2 + 1);
+  g.stalker.setPos(57 * 2 + 1, 32 * 2 + 1);
   g.director.interact({ type: "item", id: "hatch" });
 });
 // the escape cutscene runs on game-time; under headless SwiftShader the dt-capped
@@ -198,8 +198,8 @@ await page.screenshot({ path: `${SHOTS}/e2e-win.png` });
 await beginRun();
 await page.evaluate(() => {
   const g = window.__game;
-  g.player.x = 27 * 2 + 1;
-  g.player.z = 13 * 2 + 1 + 2;
+  g.player.x = 31 * 2 + 1;
+  g.player.z = 16 * 2 + 1 + 2;
   g.player.yaw = 0;
   g.player.pitch = 0;
 });

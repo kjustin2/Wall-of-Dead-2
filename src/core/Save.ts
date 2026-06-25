@@ -14,7 +14,12 @@ export interface SaveData {
   power: boolean;
   battery: number;
   bottles: number;
-  /** cutscene flags already shown (so they don't replay on restore) */
+  /** torch on/off at the checkpoint (optional; older saves resume torch-off) */
+  lightOn?: boolean;
+  /** creature awareness 0..2 at the checkpoint (optional; older saves infer it) */
+  alert?: number;
+  /** one-time event flags already fired (cutscenes + one-shot subtitles/stingers),
+   *  so nothing replays after a restore */
   seen: string[];
   /** safe respawn: cell x, cell y, yaw */
   spawn: [number, number, number];
@@ -22,6 +27,25 @@ export interface SaveData {
 
 export interface Settings {
   quality?: "low" | "medium" | "high";
+  /** preferred display mode — restored on the next start gesture */
+  fullscreen?: boolean;
+  /** internal render-resolution multiplier (0.5 / 0.75 / 1) */
+  renderScale?: number;
+  /** tone-mapping brightness multiplier (~0.7..1.4) */
+  brightness?: number;
+  /** base vertical field-of-view in degrees */
+  fov?: number;
+  /** mouse-look sensitivity multiplier (1 = default) */
+  sensitivity?: number;
+  /** invert vertical look */
+  invertY?: boolean;
+  /** master audio volume, 0..1 */
+  volume?: number;
+  /** per-category audio mix, 0..1 (ambience / creature / broadcast voice / music) */
+  volAmbient?: number;
+  volCreature?: number;
+  volVoice?: number;
+  volMusic?: number;
 }
 
 const KEY = "deadair.save.v1";
@@ -29,12 +53,18 @@ const SKEY = "deadair.settings.v1";
 
 export const Save = {
   has(): boolean {
-    try { return !!localStorage.getItem(KEY); } catch { return false; }
+    return !!this.load();
   },
   load(): SaveData | null {
     try {
       const s = localStorage.getItem(KEY);
-      return s ? (JSON.parse(s) as SaveData) : null;
+      if (!s) return null;
+      const d = JSON.parse(s) as SaveData;
+      // reject anything not in the current shape so a corrupt / older-format save
+      // can't drive a NaN spawn through collision + the AI on CONTINUE
+      if (!d || d.v !== 1 || !Array.isArray(d.spawn) || d.spawn.length < 3 ||
+          d.spawn.some((n) => typeof n !== "number" || !Number.isFinite(n))) return null;
+      return d;
     } catch { return null; }
   },
   write(d: SaveData): void {

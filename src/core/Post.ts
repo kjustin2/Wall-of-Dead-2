@@ -80,6 +80,7 @@ export class Post {
 
   private quality: Quality = "high";
   private renderScale = 1;
+  private userScale = 1; // user-chosen resolution multiplier (Options → RESOLUTION)
   private dof = false;
   private locked = false;
   private maxPR: number;
@@ -192,8 +193,23 @@ export class Post {
     this.caTarget = this.caBase + (chase ? 0.004 : 0) + (dying ? 0.012 : 0);
   }
 
+  /** user RESOLUTION control — multiplies the internal render resolution. */
+  setRenderScale(s: number): void {
+    this.userScale = Math.max(0.25, Math.min(1, s));
+    this.applyScale();
+  }
+
+  getRenderScale(): number {
+    return this.userScale;
+  }
+
+  /** effective device-pixel-ratio the scene is actually rendered at (for a px readout) */
+  effectivePixelRatio(): number {
+    return this.quality === "off" ? this.maxPR : this.maxPR * this.renderScale * this.userScale;
+  }
+
   private applyScale(): void {
-    const pr = this.maxPR * this.renderScale;
+    const pr = this.maxPR * this.renderScale * this.userScale;
     this.composer.setPixelRatio(pr);
     this.composer.setSize(this.w, this.h);
     // FXAA needs its texel size in device pixels; SMAA/bloom self-size

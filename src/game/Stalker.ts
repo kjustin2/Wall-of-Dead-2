@@ -584,6 +584,23 @@ export class Stalker {
     this.suspicion = 1;
   }
 
+  /** chase fallback: a path to the nearest reachable waypoint to a world point,
+   *  so the creature keeps closing the gap when the target cell itself is walled
+   *  off. Only used when a direct path comes back empty (rare), so the per-call
+   *  sort + BFS retries are acceptable. */
+  private pathTowardWaypoint(sx: number, sy: number, wx: number, wz: number): Array<[number, number]> {
+    const byNearest = [...WAYPOINTS].sort((a, b) => {
+      const [ax, az] = this.level.cellCenter(a[0], a[1]);
+      const [bx, bz] = this.level.cellCenter(b[0], b[1]);
+      return Math.hypot(ax - wx, az - wz) - Math.hypot(bx - wx, bz - wz);
+    });
+    for (const wp of byNearest) {
+      const p = this.level.findPath(sx, sy, wp[0], wp[1], true);
+      if (p && p.length) return p;
+    }
+    return [];
+  }
+
   hearNoise(x: number, z: number, loud: number): void {
     if (this.state === "dormant") return;
     const d = Math.hypot(x - this.x, z - this.z);
@@ -794,6 +811,12 @@ export class Stalker {
           const [sx, sy] = this.level.worldToCell(this.x, this.z);
           const [gx, gy] = this.level.worldToCell(this.lastSeen[0], this.lastSeen[1]);
           this.path = this.level.findPath(sx, sy, gx, gy, true) ?? [];
+          // the final chase must never stall: if the player's exact cell can't be
+          // reached (behind a locked door, on a blocked-floor edge), close in via
+          // the nearest reachable waypoint instead of standing frozen.
+          if (this.path.length === 0 && this.finalChase) {
+            this.path = this.pathTowardWaypoint(sx, sy, this.lastSeen[0], this.lastSeen[1]);
+          }
         }
         if (this.path.length === 0 && this.lastSeen && !this.finalChase) {
           const d = Math.hypot(this.lastSeen[0] - this.x, this.lastSeen[1] - this.z);

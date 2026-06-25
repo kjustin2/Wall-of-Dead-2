@@ -126,15 +126,23 @@ export class Level {
     return true;
   }
 
+  // BFS scratch, reused across calls — the stalker repaths several times a second
+  // during a chase; reallocating a GRID_W*GRID_H buffer each time was pure GC churn.
+  private pathPrev = new Int32Array(GRID_W * GRID_H);
+  private pathQ: number[] = [];
+
   /** BFS path in cell coords; returns list of cells excluding start, including goal */
   findPath(sx: number, sy: number, gx: number, gy: number, canBash: boolean): Array<[number, number]> | null {
     if (!this.inBounds(gx, gy)) return null;
     const start = this.idx(sx, sy);
     const goal = this.idx(gx, gy);
     if (start === goal) return [];
-    const prev = new Int32Array(GRID_W * GRID_H).fill(-1);
+    const prev = this.pathPrev;
+    prev.fill(-1);
     prev[start] = start;
-    const q: number[] = [start];
+    const q = this.pathQ;
+    q.length = 0;
+    q.push(start);
     let head = 0;
     while (head < q.length) {
       const cur = q[head++];

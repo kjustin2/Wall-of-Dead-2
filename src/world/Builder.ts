@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
-  CELL, GRID_W, GRID_H, WALL_H, PILLARS, PROPS, ITEMS, LIGHT_DEFS, SIGNS,
-  type ItemDef, type LightDef
+  CELL, GRID_W, GRID_H, WALL_H, PILLARS, PROPS, ITEMS, LIGHT_DEFS, SIGNS, SCARES,
+  type ItemDef, type LightDef, type ScareDef
 } from "./data";
 import type { Level, Door } from "./Level";
 import type { Assets } from "../core/Assets";
@@ -33,6 +33,16 @@ export interface ItemHandle {
   taken: boolean;
 }
 
+export interface ScareHandle {
+  def: ScareDef;
+  /** prop root, positioned + facing; the Director toggles `visible` when it fires */
+  root: THREE.Group;
+  /** the swung (hang) / moved (dart) / dropped (drop) / flashed (face) child */
+  pivot: THREE.Group;
+  /** resting Y of the pivot once a drop lands */
+  restY: number;
+}
+
 export interface BuiltWorld {
   group: THREE.Group;
   lights: Map<string, LightHandle>;
@@ -45,6 +55,8 @@ export interface BuiltWorld {
   /** prop slots (positioned groups holding primitives) so GLB models can be
    *  swapped in once they finish loading; see main.ts */
   props: Array<{ group: THREE.Group; kind: string }>;
+  /** hidden visual false-scares, revealed + animated by the Director */
+  scares: Map<string, ScareHandle>;
 }
 
 // deterministic rng for clutter
@@ -199,6 +211,52 @@ function makeNoteTexture(seed: number): THREE.CanvasTexture {
   return t;
 }
 
+/** a gaunt pale face on a transparent ground — for the "face at the glass" scare */
+function makeFaceTexture(seed: number): THREE.CanvasTexture {
+  const rnd = lcg(seed);
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 160;
+  const g = c.getContext("2d")!;
+  g.clearRect(0, 0, 128, 160);
+  const fx = 64, fy = 84;
+  const grd = g.createRadialGradient(fx, fy, 8, fx, fy, 64);
+  grd.addColorStop(0, "rgba(198,192,180,0.98)");
+  grd.addColorStop(0.7, "rgba(150,144,132,0.9)");
+  grd.addColorStop(1, "rgba(18,18,20,0)");
+  g.fillStyle = grd;
+  g.beginPath(); g.ellipse(fx, fy, 40, 56, 0, 0, Math.PI * 2); g.fill();
+  // hollow eyes
+  g.fillStyle = "rgba(4,4,6,0.92)";
+  for (const dx of [-15, 15]) { g.beginPath(); g.ellipse(fx + dx, fy - 8, 8, 11, 0, 0, Math.PI * 2); g.fill(); }
+  g.fillStyle = "rgba(180,200,210,0.5)";
+  for (const dx of [-15, 15]) { g.beginPath(); g.arc(fx + dx - 2, fy - 11, 1.6, 0, Math.PI * 2); g.fill(); }
+  // gaunt mouth
+  g.strokeStyle = "rgba(6,4,6,0.8)"; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(fx - 12, fy + 26); g.quadraticCurveTo(fx, fy + 34, fx + 12, fy + 26); g.stroke();
+  for (let i = 0; i < 140; i++) { g.fillStyle = `rgba(0,0,0,${rnd() * 0.12})`; g.fillRect(fx - 40 + rnd() * 80, fy - 56 + rnd() * 112, 1, 1); }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** a crude humanoid body from capsule primitives (origin at the feet) */
+function makeBody(skin: THREE.Material, cloth: THREE.Material): THREE.Group {
+  const g = new THREE.Group();
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.5, 4, 8), cloth);
+  torso.position.y = 1.1;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 12), skin);
+  head.position.y = 1.55;
+  const armGeo = new THREE.CapsuleGeometry(0.06, 0.42, 4, 6);
+  const armL = new THREE.Mesh(armGeo, cloth); armL.position.set(-0.22, 1.0, 0); armL.rotation.z = 0.2;
+  const armR = new THREE.Mesh(armGeo, cloth); armR.position.set(0.22, 1.0, 0); armR.rotation.z = -0.2;
+  const legGeo = new THREE.CapsuleGeometry(0.08, 0.5, 4, 6);
+  const legL = new THREE.Mesh(legGeo, cloth); legL.position.set(-0.1, 0.5, 0);
+  const legR = new THREE.Mesh(legGeo, cloth); legR.position.set(0.1, 0.5, 0);
+  g.add(torso, head, armL, armR, legL, legR);
+  return g;
+}
+
 const FACE_ROT: Record<string, number> = { s: 0, n: Math.PI, e: Math.PI / 2, w: -Math.PI / 2 };
 const FACE_OFF: Record<string, [number, number]> = { s: [0, 1.01], n: [0, -1.01], e: [1.01, 0], w: [-1.01, 0] };
 
@@ -312,13 +370,14 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
   // ceiling pipes along the service routes (new hub-and-spoke layout)
   const pipeMat = assets.material("metal");
   const pipeRuns: Array<[number, number, number, number, number, number]> = [
-    // x1, z1, x2, z2, y, radius
-    [37, 30, 69, 30, 2.72, 0.055],   // concourse, e-w
-    [37, 31, 69, 31, 2.6, 0.035],
-    [96, 23, 96, 53, 2.68, 0.05],    // platform, n-s
-    [9, 28, 24, 28, 2.6, 0.045],     // maintenance, e-w
-    [51, 49, 51, 66, 2.58, 0.045],   // service stair, n-s
-    [30, 73, 66, 73, 2.6, 0.05]      // intake archive, e-w
+    // x1, z1, x2, z2, y, radius  (world metres; new hub-and-spoke layout)
+    [37, 59, 87, 59, 2.72, 0.055],   // concourse, e-w
+    [37, 60, 87, 60, 2.6, 0.035],
+    [115, 49, 115, 81, 2.68, 0.05],  // platform, n-s
+    [7, 61, 21, 61, 2.6, 0.045],     // maintenance, e-w
+    [61, 19, 61, 38, 2.62, 0.04],    // arrival hall, n-s
+    [61, 83, 61, 105, 2.58, 0.045],  // service stair, n-s
+    [29, 127, 83, 127, 2.6, 0.05]    // intake archive, e-w
   ];
   for (const [x1, z1, x2, z2, y, r] of pipeRuns) {
     const len = Math.hypot(x2 - x1, z2 - z1);
@@ -345,9 +404,9 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
     s.scale.x = 0.6 + rnd();
     group.add(s);
   }
-  // the drag smear: from the platform's west door toward where it sits
+  // the drag smear: from the platform's west door toward the dark far (south) end
   {
-    const x1 = 80, z1 = 37, x2 = 95, z2 = 51;
+    const x1 = 105, z1 = 65, x2 = 117, z2 = 79;
     const len = Math.hypot(x2 - x1, z2 - z1);
     const geo = new THREE.PlaneGeometry(0.55, len);
     geo.rotateX(-Math.PI / 2);
@@ -430,7 +489,7 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
   {
     const cageMat = assets.material("metal");
     const cage = new THREE.Group();
-    const cx = 53, cz = 10; // world centre of the shaft head
+    const cx = 63, cz = 11; // world centre of the shaft head (new layout)
     const hw = 3.6, hd = 3.0;
     const postGeo = new THREE.BoxGeometry(0.12, WALL_H - 0.1, 0.12);
     for (const [ox, oz] of [[-hw, -hd], [hw, -hd], [-hw, hd], [hw, hd]] as const) {
@@ -510,15 +569,15 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
     group.add(plane);
   }
 
-  // the wall of faces — intake archive north wall (z ~= 70), the Act III reveal.
+  // the wall of faces — intake archive north wall (z = 118), the Act III reveal.
   // Every face ever sent down to fix Repeater 4, floor to higher than a man can reach.
   {
     const faceRnd = lcg(9157);
     const portraits = [0, 1, 2, 3, 4].map((i) => makePortraitTexture(1000 + i * 37));
     const faceGeo = new THREE.PlaneGeometry(0.46, 0.61);
     for (let yi = 0; yi < 4; yi++) {
-      for (let x = 30; x <= 66; x += 2.6) {
-        if (x > 50 && x < 56) continue;        // leave the service-stair doorway clear
+      for (let x = 30; x <= 82; x += 2.6) {
+        if (x > 57 && x < 65) continue;        // leave the d_intake doorway clear (cell x30)
         if (faceRnd() < 0.12) continue;        // organic gaps
         const tex = portraits[Math.floor(faceRnd() * portraits.length)];
         const mat = new THREE.MeshStandardMaterial({
@@ -528,7 +587,7 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
         m.position.set(
           x + (faceRnd() - 0.5) * 0.5,
           0.95 + yi * 0.55 + (faceRnd() - 0.5) * 0.12,
-          70.03
+          118.03
         );
         m.rotation.z = (faceRnd() - 0.5) * 0.16;
         m.scale.setScalar(0.85 + faceRnd() * 0.4);
@@ -819,5 +878,59 @@ export function buildWorld(level: Level, assets: Assets): BuiltWorld {
     items.set(it.id, { def: it, obj, baseY, taken: false });
   }
 
-  return { group, lights, doorHandles, items, panelLed, coreScreen, exitSigns, props };
+  // ---- visual false-scares: built hidden, revealed + animated by the Director ----
+  const scares = new Map<string, ScareHandle>();
+  const paleMat = new THREE.MeshStandardMaterial({ color: 0xb7b0a2, roughness: 0.92, emissive: 0x0b0a09, emissiveIntensity: 0.18 });
+  const clothMat = new THREE.MeshStandardMaterial({ color: 0x15171b, roughness: 0.96 });
+  const ropeMat = new THREE.MeshStandardMaterial({ color: 0x4f4429, roughness: 0.9 });
+  for (const sc of SCARES) {
+    const [x, z] = level.cellCenter(sc.cx, sc.cy);
+    const root = new THREE.Group();
+    root.position.set(x, 0, z);
+    root.rotation.y = FACE_ROT[sc.face];
+    let pivot: THREE.Group;
+    let restY = 0;
+    if (sc.kind === "hang") {
+      // a body hung from the ceiling; the pivot swings on reveal
+      pivot = new THREE.Group();
+      pivot.position.set(0, WALL_H, 0);          // anchor at the ceiling
+      const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 6), ropeMat);
+      rope.position.y = -0.4;
+      const body = makeBody(paleMat, clothMat);
+      body.position.y = -2.25;                    // head ~y2.2, feet ~y0.65 (dangling)
+      body.rotation.x = 0.06;
+      pivot.add(rope, body);
+      root.add(pivot);
+    } else if (sc.kind === "dart") {
+      // a dark silhouette that sprints across the far doorway, then is gone
+      pivot = new THREE.Group();
+      pivot.add(makeBody(clothMat, clothMat));
+      root.add(pivot);
+    } else if (sc.kind === "drop") {
+      // a body that falls from the ceiling with a slam
+      pivot = new THREE.Group();
+      pivot.position.y = WALL_H;                  // starts at the ceiling
+      pivot.add(makeBody(paleMat, clothMat));
+      root.add(pivot);
+      restY = 0.2;
+    } else {
+      // a pale face that presses to the wall (local +z faces into the room after rot)
+      pivot = new THREE.Group();
+      const faceTex = makeFaceTexture(sc.cx * 7 + sc.cy + 11);
+      const faceMat = new THREE.MeshStandardMaterial({
+        map: faceTex, transparent: true, emissive: 0xffffff, emissiveMap: faceTex,
+        emissiveIntensity: 0.3, roughness: 0.95, side: THREE.DoubleSide, depthWrite: false
+      });
+      const facePlane = new THREE.Mesh(new THREE.PlaneGeometry(0.52, 0.66), faceMat);
+      facePlane.position.set(0, 1.6, 0.92);
+      pivot.add(facePlane);
+      root.add(pivot);
+    }
+    root.traverse((m) => { if ((m as THREE.Mesh).isMesh) m.castShadow = true; });
+    root.visible = false;
+    group.add(root);
+    scares.set(sc.id, { def: sc, root, pivot, restY });
+  }
+
+  return { group, lights, doorHandles, items, panelLed, coreScreen, exitSigns, props, scares };
 }

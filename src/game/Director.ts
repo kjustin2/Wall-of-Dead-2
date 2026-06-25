@@ -1,13 +1,13 @@
 import * as THREE from "three";
 import type { Level } from "../world/Level";
-import type { BuiltWorld } from "../world/Builder";
+import type { BuiltWorld, ScareHandle } from "../world/Builder";
 import type { Player } from "./Player";
 import type { Stalker } from "./Stalker";
 import type { Hud } from "../ui/Hud";
 import type { AudioFX } from "../core/AudioFX";
 import type { Cutscene } from "./Cinematic";
 import type { SaveData } from "../core/Save";
-import { ZONES, ITEMS, NAV, CELL, STALKER_START } from "../world/data";
+import { ZONES, ITEMS, NAV, CELL, WALL_H, STALKER_START } from "../world/data";
 
 export type InteractTarget =
   | { type: "item"; id: string }
@@ -47,9 +47,11 @@ export class Director {
   private flags = new Set<string>();
   private beats: DelayedBeat[] = [];
   private scareT = 40;
-  /** the first monster sighting is held back until the Act-I build-up has played
-   *  (armed by finishing the build-up, or by collecting a fuse) */
+  /** the first monster sighting is held back until the player has explored a little
+   *  (armed by a false-scare, by collecting fuse A, or by reaching a spoke) */
   private sightingArmed = false;
+  /** the currently-animating place-gated visual false-scare, if any */
+  private activeScare: { h: ScareHandle; t: number; dur: number } | null = null;
 
   onDeath: ((text: string) => void) | null = null;
   onWin: ((text: string) => void) | null = null;
@@ -88,19 +90,24 @@ export class Director {
   cellWorld(cx: number, cy: number): [number, number] {
     return [cx * CELL + CELL / 2, cy * CELL + CELL / 2];
   }
-  private vec(cx: number, cy: number, y = 1.4): THREE.Vector3 {
-    const [x, z] = this.cellWorld(cx, cy);
-    return new THREE.Vector3(x, y, z);
+  /** the single reused objective vector, pointed at a cell center (no per-frame
+   *  alloc — refreshObjective runs every frame; main copies it before mutating) */
+  private objVec = new THREE.Vector3();
+  private objAt(cx: number, cy: number, y = 1.4): THREE.Vector3 {
+    return this.objVec.set(cx * CELL + CELL / 2, y, cy * CELL + CELL / 2);
   }
   private item(id: string) {
     return this.world.items.get(id)!;
   }
 
   // ---------- save / restore ----------
-  /** auto-save a checkpoint at the current spot */
-  private checkpoint(beat: string): void {
+  /** label of the last checkpoint — reused when flushing a mid-beat exit-save */
+  private lastBeat = "In the dark";
+
+  /** build a SaveData from the *current* live state */
+  private buildSave(beat: string): SaveData {
     const [cx, cy] = this.level.worldToCell(this.player.x, this.player.z);
-    this.onCheckpoint?.({
+    return {
       v: 1,
       beat,
       fuses: this.fuses,
@@ -109,9 +116,31 @@ export class Director {
       power: this.power,
       battery: this.player.battery,
       bottles: this.player.bottles,
-      seen: [...this.flags].filter((f) => f.startsWith("cs_")),
+      lightOn: this.player.lightOn,
+      alert: this.stalker.alert,
+      // persist *every* one-time flag, not just cutscenes — otherwise one-shot
+      // subtitles/stingers (gotbottles, firstslam, maint_scare, low-battery…) replay
+      // after a reload that lands before the next checkpoint
+      seen: [...this.flags],
       spawn: [cx, cy, this.player.yaw]
-    });
+    };
+  }
+
+  /** auto-save a checkpoint at the current spot (story beats) */
+  private checkpoint(beat: string): void {
+    this.lastBeat = beat;
+    this.onCheckpoint?.(this.buildSave(beat));
+  }
+
+  /**
+   * A save of the *current* live position/progress, used to flush ground gained
+   * between sparse checkpoints when the player quits or the tab/app closes. Returns
+   * null when there's nothing safe to persist — dead, mid-death, or in the final
+   * chase (where the last "Repeater core" checkpoint is the intended resume point).
+   */
+  snapshot(): SaveData | null {
+    if (this.over || this.dying || this.chase) return null;
+    return this.buildSave(this.lastBeat);
   }
 
   /**
@@ -132,6 +161,8 @@ export class Director {
     this.visited = new Set();
     this.flags = new Set(d.seen);
     this.sightingArmed = true; // past the intro build-up; allow the sighting if unseen
+    this.activeScare = null;
+    for (const h of this.world.scares.values()) h.root.visible = false;
 
     // items: fuses match the checkpoint (consumables keep whatever was taken)
     this.item("fuse_a").taken = d.fuseA;
@@ -153,6 +184,7 @@ export class Director {
     // player
     this.player.battery = d.battery;
     this.player.bottles = d.bottles;
+    this.player.lightOn = !!d.lightOn; // older saves resume torch-off (consistent breath)
     this.player.frozen = false;
     const [cx, cy, yaw] = d.spawn;
     const [x, z] = this.level.cellCenter(cx, cy);
@@ -168,7 +200,11 @@ export class Director {
     this.stalker.state = "dormant";
     this.stalker.finalChase = false;
     this.stalker.suspicion = 0;
-    this.stalker.alert = d.power || d.fuseB ? 2 : d.fuseA ? 1 : 0;
+    // restore the saved awareness; fall back to the progress heuristic for older saves
+    this.stalker.alert = d.alert ?? (d.power || d.fuseB ? 2 : d.fuseA ? 1 : 0);
+
+    // resume the score appropriate to how far in the checkpoint is
+    this.fx.playMusic(d.power ? "unease" : "dread", d.power ? 0.5 : 0.4);
 
     this.refreshObjective(true);
   }
@@ -186,50 +222,39 @@ export class Director {
   begin(): void {
     const [sx, , sz] = [this.player.x, 0, this.player.z];
     const eye = this.player.eyeY;
-    // open framed on the dark station mouth, settle to eye level looking south
+    // open framed on the dark station mouth, settle to eye level looking south.
+    // Beats are spaced so each story blurb lingers ~1s longer than it reads — the
+    // descent is the game's first impression and the text shouldn't rush past.
     const cut: Cutscene = {
-      duration: 9.5,
+      duration: 11.5,
       letterbox: true,
       keys: [
         { t: 0.0, pos: [sx, 2.5, sz - 1.2], look: [sx, 1.2, sz + 8], fov: 56 },
-        { t: 3.0, pos: [sx, 1.95, sz - 0.4], look: [sx, 1.4, sz + 10], fov: 60 },
-        { t: 6.2, pos: [sx, 1.78, sz + 0.2], look: [sx, 1.45, sz + 12], fov: 62 },
-        { t: 9.5, pos: [sx, eye, sz], look: [sx, eye, sz + 14], fov: 66 }
+        { t: 3.6, pos: [sx, 1.95, sz - 0.4], look: [sx, 1.4, sz + 10], fov: 60 },
+        { t: 7.4, pos: [sx, 1.78, sz + 0.2], look: [sx, 1.45, sz + 12], fov: 62 },
+        { t: 11.5, pos: [sx, eye, sz], look: [sx, eye, sz + 14], fov: 66 }
       ],
       events: [
         { t: 0.0, fn: () => { this.hud.blackout(1, 0); this.fx.liftDescend(); } },
         { t: 0.4, fn: () => this.hud.blackout(0, 2.8) },
-        { t: 0.6, fn: () => this.hud.caption("Cass — you reading me? Lift's logged you at the sub-level. Nice and easy down there.", "VESNA · CONTROL", 4.2) },
-        { t: 1.2, fn: () => this.fx.radioVoice(2.4) },
-        { t: 4.6, fn: () => { this.fx.liftClunk(); this.hud.caption("Two fuses back in the rack, restart the broadcast, ride up. Routine. You'll be topside by dawn.", "VESNA · CONTROL", 4.5) } },
-        { t: 5.0, fn: () => this.fx.radioVoice(2.6) },
-        { t: 8.6, fn: () => this.hud.subtitle("The cage opens onto the lower concourse. The air tastes like old pennies.", 5) }
+        { t: 0.6, fn: () => this.hud.caption("Cass — you reading me? Lift's logged you at the sub-level. Nice and easy down there.", "VESNA · CONTROL", 5.4) },
+        { t: 1.2, fn: () => this.fx.radioVoice(3.0) },
+        { t: 5.8, fn: () => { this.fx.liftClunk(); this.hud.caption("Two fuses back in the rack, restart the broadcast, ride up. Routine. You'll be topside by dawn.", "VESNA · CONTROL", 5.6) } },
+        { t: 6.2, fn: () => this.fx.radioVoice(3.2) },
+        { t: 10.6, fn: () => this.hud.subtitle("The cage clanks open onto the shaft head. Ahead, the arrival hall runs down into the dark. The air tastes like old pennies.", 6) }
       ]
     };
     this.refreshObjective(true);
     this.playCut(cut, () => {
       this.fx.groanDistant();
-      this.checkpoint("Arrival — lower concourse");
-      this.after(8, () => this.hud.caption("Surface feed's still looping the same count down there — 312. Reception's bad. Stay on this channel.", "VESNA · CONTROL", 5));
-      // ---- Act I build-up: escalating dread + minor, creatureless jumpscares, so the
-      // ---- monster is felt long before it is ever seen. The first sighting stays
-      // ---- disarmed until this peaks (or a fuse is collected).
-      this.after(14, () => { this.fx.drag(this.player.x + 9, this.player.z - 11); this.hud.subtitle("Something heavy drags across the floor, far off. Then stops.", 4); });
-      this.after(22, () => { this.dipNearLights(0.7, 2); this.fx.creak(this.player.x + 4, this.player.z - 6); });
-      this.after(30, () => {
-        // minor jumpscare: a clang + camera jolt behind you, nothing there
-        const [fwx, fwz] = this.player.forward();
-        this.fx.slam(this.player.x - fwx * 7, this.player.z - fwz * 7, false);
-        this.jumpscare({ shake: 0.4 });
-        this.hud.subtitle("Metal clatters down a corridor behind you. When you look — empty.", 3.8);
-      });
-      this.after(38, () => { this.fx.whisper(this.player.x - 2, this.player.z - 3); this.hud.subtitle("A whisper, close enough to feel on your neck. There is no one there.", 4); });
-      this.after(46, () => {
-        // the dread peaks and the first sighting is now armed
-        this.dipNearLights(0.9, 3); this.fx.groanDistant();
-        this.sightingArmed = true;
-        this.hud.subtitle("The lights are failing, one by one. Whatever is down here knows you are.", 4.5);
-      });
+      this.fx.playMusic("dread", 0.4); // low dread bed under the whole descent
+      this.checkpoint("Arrival — shaft head");
+      // Calm, legible arrival: a clear briefing + room to read the world, and NO
+      // timed startles. Dread is now PLACE-driven — zone subtitles plus the four
+      // place-gated visual SCARES — so the monster is built toward, never rushed.
+      this.after(6, () => this.hud.caption("Surface feed's still looping the same count down there — three hundred and twelve. Reception's rough this deep. Stay on this channel.", "VESNA · CONTROL", 5.2));
+      this.after(13, () => this.hud.caption("Two fuses back in the rack, restart the broadcast, ride the lift up. Routine. You'll be topside by dawn.", "VESNA · CONTROL", 5.2));
+      this.after(13.4, () => this.fx.radioVoice(3.0));
     });
   }
 
@@ -237,10 +262,17 @@ export class Director {
   update(dt: number): void {
     if (this.over) return;
 
-    for (const b of this.beats) b.t -= dt;
-    const due = this.beats.filter((b) => b.t <= 0);
-    this.beats = this.beats.filter((b) => b.t > 0);
-    for (const b of due) b.fn();
+    // scheduled story beats — only touch the arrays when one is actually due, so
+    // the common "nothing pending" frame allocates nothing on the hot path
+    if (this.beats.length) {
+      let anyDue = false;
+      for (const b of this.beats) { b.t -= dt; if (b.t <= 0) anyDue = true; }
+      if (anyDue) {
+        const due = this.beats.filter((b) => b.t <= 0);
+        this.beats = this.beats.filter((b) => b.t > 0);
+        for (const b of due) b.fn();
+      }
+    }
 
     // zone triggers
     const [pcx, pcy] = this.level.worldToCell(this.player.x, this.player.z);
@@ -252,19 +284,83 @@ export class Director {
     }
 
     this.refreshObjective(false);
+    this.tickScares(dt);
 
     // battery warnings
     if (this.player.battery < 0.18 && this.player.lightOn && this.once("lowbat")) this.hud.subtitle("The torch is dying.");
     if (this.player.battery <= 0 && this.once("nobat")) this.hud.subtitle("The torch gives out.");
 
-    // ambient dread (never while it's already close or chasing)
-    if (!this.chase) {
+    // ambient dread — only once you're past the calm arrival (at the hub or beyond),
+    // and never while it's already close or chasing
+    if (!this.chase && this.visited.has("concourse")) {
       this.scareT -= dt;
       if (this.scareT <= 0) {
         const d = Math.hypot(this.stalker.x - this.player.x, this.stalker.z - this.player.z);
         if (d < 13) this.scareT = 9;
         else { this.scareT = 42 + Math.random() * 34; this.ambientScare(); }
       }
+    }
+  }
+
+  // ---------- place-gated visual false-scares (the pre-monster jumpscares) ----------
+  /** trigger a scare when the player crosses its zone, then run its short animation */
+  private tickScares(dt: number): void {
+    if (!this.chase) {
+      for (const h of this.world.scares.values()) {
+        if (this.flags.has(h.def.id) || this.activeScare) break;
+        const [tx, tz] = this.cellWorld(h.def.triggerCx, h.def.triggerCy);
+        const r = h.def.radius ?? 2.5;
+        if ((this.player.x - tx) ** 2 + (this.player.z - tz) ** 2 <= r * r) {
+          this.once(h.def.id);
+          this.fireScare(h);
+          break;
+        }
+      }
+    }
+    const a = this.activeScare;
+    if (!a) return;
+    a.t += dt;
+    const k = Math.min(1, a.t / a.dur);
+    const h = a.h;
+    if (h.def.kind === "hang") {
+      h.pivot.rotation.z = Math.sin(a.t * 5.2) * 0.2 * (1 - k);          // swings, damping out
+    } else if (h.def.kind === "dart") {
+      h.pivot.position.z = 1.7 - 3.4 * Math.min(1, k * 1.6);            // sprints across the doorway
+    } else if (h.def.kind === "drop") {
+      const fall = Math.min(1, k * 2.4);
+      h.pivot.position.y = WALL_H + (h.restY - WALL_H) * (fall * fall * (3 - 2 * fall)); // smoothstep fall
+      if (k > 0.55) h.pivot.rotation.x = ((k - 0.55) / 0.45) * (Math.PI / 2);            // topples prone on impact
+    } // "face": just holds visible, then vanishes
+    if (a.t >= a.dur) {
+      h.root.visible = false;
+      this.activeScare = null;
+    }
+  }
+
+  private fireScare(h: ScareHandle): void {
+    h.root.visible = true;
+    this.activeScare = { h, t: 0, dur: h.def.kind === "face" ? 0.9 : 1.15 };
+    this.sightingArmed = true;          // a real scare counts as build-up toward the reveal
+    const [x, z] = this.cellWorld(h.def.cx, h.def.cy);
+    this.jumpscare({ shake: h.def.kind === "drop" ? 0.7 : 0.5 });
+    switch (h.def.kind) {
+      case "hang":
+        this.fx.creak(x, z);
+        this.hud.subtitle("A body hangs in the dark, turning slowly on a cable. Long dead — not what's down here with you.", 4.5);
+        break;
+      case "dart":
+        this.fx.whisper(x, z);
+        this.hud.subtitle("Something crosses the far end of the hall — fast, low, wrong — and is gone before you can fix on it.", 4);
+        break;
+      case "drop":
+        this.fx.slam(x, z, true);
+        this.level.addNoise(x, z, 8);
+        this.hud.subtitle("A body drops out of the dark above and slams the steps. It does not move again. It is not the one you're afraid of.", 4.5);
+        break;
+      case "face":
+        this.fx.whisper(x, z);
+        this.hud.subtitle("A face at the glass — pale, close, mouth working. Your torch sweeps across and finds nothing but your own light.", 4.5);
+        break;
     }
   }
 
@@ -278,36 +374,36 @@ export class Director {
       const a = this.item("fuse_a");
       const b = this.item("fuse_b");
       if (!a.taken || !b.taken) {
-        // point at the nearer uncollected fuse
-        let best: THREE.Vector3 | null = null;
-        let bestD = Infinity;
+        // point at the nearer uncollected fuse (compare distances without alloc)
+        let bestCx = 0, bestCy = 0, bestD = Infinity;
         for (const f of [a, b]) {
           if (f.taken) continue;
-          const v = this.vec(f.def.cx, f.def.cy, 0.7);
-          const d = Math.hypot(v.x - this.player.x, v.z - this.player.z);
-          if (d < bestD) { bestD = d; best = v; }
+          const fx = f.def.cx * CELL + CELL / 2;
+          const fz = f.def.cy * CELL + CELL / 2;
+          const d = Math.hypot(fx - this.player.x, fz - this.player.z);
+          if (d < bestD) { bestD = d; bestCx = f.def.cx; bestCy = f.def.cy; }
         }
-        target = best;
+        target = this.objAt(bestCx, bestCy, 0.7);
         label = "BREAKER FUSE";
         hudText = `Restore main power — find the two breaker fuses  (${this.fuses} / 2)`;
       } else {
-        target = this.vec(NAV.rack[0], NAV.rack[1], 1.4);
+        target = this.objAt(NAV.rack[0], NAV.rack[1], 1.4);
         label = "BREAKER RACK";
         hudText = "Refit the fuses at the breaker rack — generator hall";
       }
     } else if (!this.broadcast) {
-      const [, pcy] = this.level.worldToCell(this.player.x, this.player.z);
+      const pcy = Math.floor(this.player.z / CELL);
       if (pcy < 33) {
-        target = this.vec(NAV.stairDown[0], NAV.stairDown[1], 1.4);
+        target = this.objAt(NAV.stairDown[0], NAV.stairDown[1], 1.4);
         label = "SERVICE STAIR";
         hudText = "Restore the broadcast at the repeater core — service stair, below";
       } else {
-        target = this.vec(NAV.core[0], NAV.core[1], 1.2);
+        target = this.objAt(NAV.core[0], NAV.core[1], 1.2);
         label = "REPEATER CORE";
         hudText = "Restore the broadcast at the repeater core";
       }
     } else {
-      target = this.vec(NAV.hatch[0], NAV.hatch[1], 1.4);
+      target = this.objAt(NAV.hatch[0], NAV.hatch[1], 1.4);
       label = "SURFACE HATCH";
       hudText = "GET OUT — back up to the surface hatch. Slam the doors behind you.";
     }
@@ -361,35 +457,55 @@ export class Director {
 
   private enterZone(id: string): void {
     switch (id) {
+      case "arrivalHall":
+        if (this.once("z_hall")) this.hud.subtitle("The arrival hall. Lockers stand open, a clipboard on the floor. Whoever worked here left fast — or never left at all.", 5);
+        break;
+      case "lockerBay":
+        if (this.once("z_locker")) this.hud.subtitle("A row of lockers, most of them forced from the inside. Someone went through these looking for a way out.", 4.5);
+        break;
+      case "breakRoom":
+        if (this.once("z_break")) this.hud.subtitle("The break room. Cold coffee gone to fur, a shift roster pinned to the wall. The kettle is still faintly warm.", 5);
+        break;
+      case "lobby":
+        if (this.once("z_lobby")) this.hud.subtitle("Arrivals. The turnstile is jammed open. The down-board still lists tonight's shift — three names, all crossed out.", 5);
+        break;
+      case "concourse":
+        if (this.once("z_conc")) {
+          this.hud.subtitle("The lower concourse. Signs point off down every spoke — maintenance, the platform, the generator. This is the hub; you'll keep coming back here.", 6);
+          this.checkpoint("Lower concourse");
+        }
+        break;
       case "maint":
-        this.hud.subtitle("Maintenance. Third shift never clocked out.");
-        // fake-out startle: a clang + flicker, nothing there when you turn (build-up)
-        this.after(3.6, () => {
-          if (this.once("maint_scare")) {
-            this.dipNearLights(0.9, 3);
-            this.fx.slam(this.player.x - this.player.forward()[0] * 5, this.player.z - this.player.forward()[1] * 5, false);
-            this.jumpscare({ shake: 0.45 });
-            this.hud.subtitle("Something topples in the dark behind you. You turn — nothing.", 4);
-          }
-        });
+        if (this.once("z_maint")) this.hud.subtitle("Maintenance. Third shift never clocked out. The breaker fuse should be on the bench at the back.", 5);
+        this.sightingArmed = true; // genuine exploration — the platform reveal may now land
+        break;
+      case "toolCloset":
+        if (this.once("z_closet")) this.hud.subtitle("A tool closet, propped open. The torch barely reaches the back of it.", 4);
+        break;
+      case "corrE":
+        if (this.once("z_corrE")) this.hud.subtitle("The long service hall to Platform 2. The lights give out halfway down it.", 4.5);
         break;
       case "platform":
         if (!this.flags.has("cs_platform")) {
           if (this.sightingArmed) this.cutscenePlatform();
-          else if (this.once("plat_empty")) this.hud.subtitle("Platform 2. Dust on every bench, the dark sitting very still. Nothing here. Not yet.", 5);
+          else if (this.once("plat_empty")) {
+            this.hud.subtitle("Platform 2. Dust on every bench, the dark sitting very still at the far end. Nothing here. Not yet.", 5);
+            this.sightingArmed = true; // step on again and it will be
+          }
         }
         break;
       case "genHall":
-        this.hud.subtitle("The breaker rack. Two empty slots, pulled clean. Nothing blew them.");
+        if (this.once("z_gen")) this.hud.subtitle("The generator hall. The breaker rack has two empty slots, pulled clean. Nothing blew them.", 5);
+        this.sightingArmed = true;
         break;
       case "serviceStair":
-        if (this.power) this.hud.subtitle("The service stair. It goes down further than the plans admit.");
+        if (this.power && this.once("z_stair")) this.hud.subtitle("The service stair. It goes down further than the plans admit.", 4);
         break;
       case "intake":
         if (!this.flags.has("cs_intake")) this.cutsceneIntake();
         break;
       case "core":
-        this.hud.subtitle("The repeater core. The operator's chair still faces the dead mic.");
+        if (this.once("z_core")) this.hud.subtitle("The repeater core. The operator's chair still faces the dead mic.", 4);
         if (this.once("cp_core")) this.checkpoint("Repeater core"); // last save before the run
         break;
     }
@@ -399,8 +515,8 @@ export class Director {
   private cutscenePlatform(): void {
     this.once("cs_platform");
     // the creature has been hidden in the sub-level until now — bring it up to the
-    // platform's far end for the reveal, before we read its head position.
-    const [revx, revz] = this.level.cellCenter(47, 25);
+    // platform's far (south) end for the reveal, before we read its head position.
+    const [revx, revz] = this.level.cellCenter(58, 39);
     this.stalker.setPos(revx, revz);
     this.stalker.faceToward(this.player.x, this.player.z);
     const px = this.player.x;
@@ -426,27 +542,31 @@ export class Director {
     };
     this.playCut(cut, () => {
       this.stalker.endReveal();
+      // it WATCHES — not a full chase. It wakes and begins to stalk your light; the
+      // relentless pursuit is still held back until you re-arm the broadcast.
       this.stalker.activate();
       this.stalker.alert = Math.max(this.stalker.alert, 1);
-      this.level.addNoise(px, pz, 6);
-      // it locks on the instant control returns — jumpscare punch into the chase
-      this.jumpscare({ shake: 0.85, scream: true, white: true });
-      this.hud.subtitle("It sees the light. Switch it off — or run.", 4);
+      this.onScare?.(0.45);
+      this.fx.stinger();
+      this.fx.playMusic("unease", 0.5); // the score tightens once it's awake
+      this.checkpoint("Platform — first sighting");
+      this.hud.subtitle("It has seen your torch. Kill the light. Move slow, keep the dark between you — don't let it follow you down.", 6);
     });
   }
 
   // ---------- C4: the archive ----------
   private cutsceneIntake(): void {
     this.once("cs_intake");
-    // dolly along the wall of faces (north wall), settle on the operator's desk / ledger
-    const wallZ = 71.5; // just inside the intake hall's north wall
+    // dolly along the wall of faces (intake north wall, z=118), settle on the
+    // operator's desk / ledger at the far west end (~world 49,129)
+    const wallZ = 118.5; // just inside the intake hall's north wall
     const cut: Cutscene = {
       duration: 7.4,
       keys: [
-        { t: 0.0, pos: [62, 1.7, 78], look: [60, 1.7, wallZ], fov: 50 },
-        { t: 3.2, pos: [48, 1.65, 77], look: [46, 1.7, wallZ], fov: 46 },
-        { t: 5.2, pos: [40, 1.6, 79], look: [35, 1.4, 81], fov: 42 },
-        { t: 7.4, pos: [37, 1.55, 80], look: [35, 1.3, 81], fov: 40 }
+        { t: 0.0, pos: [80, 1.7, 124], look: [78, 1.7, wallZ], fov: 50 },
+        { t: 3.2, pos: [58, 1.65, 123], look: [56, 1.7, wallZ], fov: 46 },
+        { t: 5.2, pos: [52, 1.6, 126], look: [49, 1.4, 129], fov: 42 },
+        { t: 7.4, pos: [50, 1.55, 128], look: [49, 1.3, 129], fov: 40 }
       ],
       events: [
         { t: 0.3, fn: () => this.hud.caption("Photographs cover the wall, floor to ceiling. Every face ever sent down to fix something.", "", 4) },
@@ -559,16 +679,16 @@ export class Director {
   private fuseBScare(): void {
     this.sightingArmed = true;
     this.hud.subtitle("The rails hum once, like a struck wire. Then nothing.", 4);
-    this.stalker.activate();
-    this.stalker.alert = 2;
-    for (const lh of this.world.lights.values()) if (lh.on && lh.base > 0) lh.dipT = 1.2 + Math.random() * 0.7;
+    for (const lh of this.world.lights.values()) if (lh.on && lh.base > 0) lh.dipT = 1.0 + Math.random() * 0.6;
     this.fx.groanDistant();
-    this.level.addNoise(this.player.x, this.player.z, 36);
+    this.level.addNoise(this.player.x, this.player.z, 14);
     this.checkpoint("Breaker fuse — platform");
     // safety net: if the player reached fuse B *on the platform* without the entry
-    // sighting having fired, reveal the creature now (it's here with them)
+    // sighting having fired, reveal the creature now (it's here with them); otherwise
+    // it's already stalking — just keep it mildly aware, not a full chase
     const [pcx, pcy] = this.level.worldToCell(this.player.x, this.player.z);
-    if (!this.flags.has("cs_platform") && pcx >= 39 && pcx < 50 && pcy >= 11 && pcy < 27) this.cutscenePlatform();
+    if (!this.flags.has("cs_platform") && pcx >= 53 && pcx < 62 && pcy >= 24 && pcy < 41) this.cutscenePlatform();
+    else { this.stalker.activate(); this.stalker.alert = Math.max(this.stalker.alert, 1); }
   }
 
   // ---------- C3: power on (Act II -> III) ----------
@@ -578,12 +698,13 @@ export class Director {
     const px = this.player.x;
     const pz = this.player.z;
     const eye = this.player.eyeY;
-    const ledX = 46 * CELL + CELL / 2;
+    const ledX = NAV.rack[0] * CELL + CELL / 2;
+    const ledZ = NAV.rack[1] * CELL + CELL / 2;
     const cut: Cutscene = {
       duration: 5.6,
       keys: [
-        { t: 0.0, pos: [px, eye, pz], look: [ledX, 2.0, 9], fov: 58 },
-        { t: 1.8, pos: [px, eye + 0.1, pz - 0.6], look: [ledX, 2.0, 9], fov: 50 },
+        { t: 0.0, pos: [px, eye, pz], look: [ledX, 2.0, ledZ], fov: 58 },
+        { t: 1.8, pos: [px, eye + 0.1, pz - 0.6], look: [ledX, 2.0, ledZ], fov: 50 },
         { t: 3.4, pos: [px, eye, pz], look: [px - 1, 0.3, pz + 2], fov: 60 }, // attention pulled down
         { t: 5.6, pos: [px, eye, pz], look: [px, eye - 0.2, pz + 6], fov: 64 }
       ],
@@ -600,7 +721,7 @@ export class Director {
           for (const lh of this.world.lights.values()) if (lh.on && lh.base > 0) lh.dipT = 1.6;
           this.hud.caption("Power floods back — then the speakers cough static and die. The feed isn't coming from up here. It never was.", "", 4.4);
         } },
-        { t: 3.2, fn: () => { this.fx.slam(53, 47, true); } },
+        { t: 3.2, fn: () => { const [stx, stz] = this.cellWorld(NAV.stairDown[0], NAV.stairDown[1]); this.fx.slam(stx, stz, true); } },
         { t: 4.0, fn: () => { this.fx.groanDistant(); this.hud.caption("...service stair just unsealed. That shouldn't— Cass, do not go down there. Cass?", "VESNA · CONTROL", 4); } },
         { t: 4.2, fn: () => this.fx.radioVoice(2.4) }
       ]
@@ -642,7 +763,7 @@ export class Director {
     this.playCut(cut, () => {
       this.refreshObjective(true);
       // it cuts off the way back, hard — drop it at the top of the service stair
-      const [sx, sz] = this.level.cellCenter(26, 30);
+      const [sx, sz] = this.level.cellCenter(30, 42);
       this.stalker.setPos(sx, sz);
       this.stalker.endReveal();
       this.stalker.startFinalChase();
@@ -651,6 +772,7 @@ export class Director {
       this.player.stamina = 1;
       this.player.exhausted = false;
       this.fx.bash(sx, sz);
+      this.fx.playMusic("chase", 0.62); // the flight begins — agitated score
       this.jumpscare({ shake: 0.9, scream: true, white: true }); // the chase explodes to life
       this.hud.subtitle("It stops pretending to be far away. RUN.", 4);
     });
@@ -664,6 +786,7 @@ export class Director {
     this.hud.closeNote();
     this.chase = false;
     this.hud.chase(false);
+    this.fx.stopMusic(); // out into the quiet of the surface
     const px = this.player.x;
     const pz = this.player.z;
     const eye = this.player.eyeY;
@@ -699,6 +822,16 @@ export class Director {
   armSighting(): void {
     this.sightingArmed = true;
   }
+  /** reveal + freeze a named false-scare in its scariest pose (for QA screenshots) */
+  debugScare(id: string): void {
+    const h = this.world.scares.get(id);
+    if (!h) return;
+    h.root.visible = true;
+    if (h.def.kind === "dart") h.pivot.position.z = 0.2;
+    else if (h.def.kind === "drop") { h.pivot.position.y = h.restY; h.pivot.rotation.x = Math.PI / 2; }
+    else if (h.def.kind === "hang") h.pivot.rotation.z = 0.16;
+    this.flags.add(h.def.id); // don't also auto-fire it on approach
+  }
   /** restore main power without the cutscene (generator lit, stair unlocked) */
   debugPower(): void {
     this.power = true;
@@ -732,6 +865,7 @@ export class Director {
     this.player.frozen = true;
     this.hud.closeNote();
     this.hud.letterbox(true);
+    this.fx.stopMusic();
     this.fx.killScream();
     this.hud.damageFlash(1);
     this.hud.chase(false);

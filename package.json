@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -10,6 +11,7 @@
     "preview": "vite preview",
     "assets": "node scripts/fetch-assets.mjs",
     "standalone": "npm run build && electron electron/main.cjs",
+    "exe": "npm run build && electron-builder --win portable",
     "smoke": "node scripts/smoke.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "tour": "node scripts/tour.mjs",
@@ -21,12 +23,32 @@
     "perf:baseline": "node agent/perf.mjs --save-baseline",
     "diff": "node agent/diff.mjs"
   },
+  "build": {
+    "appId": "com.justin.deadair",
+    "productName": "DEAD AIR",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "DEAD-AIR-${version}.exe"
+    }
+  },
   "dependencies": {
+    "@fontsource/cinzel": "^5.2.8",
+    "@fontsource/oswald": "^5.2.8",
     "three": "^0.180.0"
   },
   "devDependencies": {
     "@types/three": "^0.180.0",
     "electron": "^42.4.1",
+    "electron-builder": "^25.1.8",
     "puppeteer-core": "^24.9.0",
     "typescript": "^5.8.3",
     "vite": "^7.1.0"

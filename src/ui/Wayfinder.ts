@@ -27,6 +27,7 @@ export class Wayfinder {
 
   private readonly tmpV = new THREE.Vector3();
   private readonly fwd = new THREE.Vector3();
+  private readonly toTarget = new THREE.Vector3();
 
   /** world position of the current objective, or null to clear */
   setObjective(world: THREE.Vector3 | null, label = ""): void {
@@ -63,7 +64,7 @@ export class Wayfinder {
     this.tmpV.copy(this.target);
     this.tmpV.project(camera);
     camera.getWorldDirection(this.fwd);
-    const toTarget = this.target.clone().sub(camera.position);
+    const toTarget = this.toTarget.copy(this.target).sub(camera.position);
     const inFront = toTarget.dot(this.fwd) > 0;
 
     const onScreen =

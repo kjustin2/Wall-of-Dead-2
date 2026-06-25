@@ -160,8 +160,8 @@ export class Hud {
     }
   }
 
-  showScreen(id: "title" | "pause" | "dead" | "win" | null): void {
-    for (const s of ["title", "pause", "dead", "win"]) {
+  showScreen(id: "title" | "pause" | "options" | "dead" | "win" | null): void {
+    for (const s of ["title", "pause", "options", "dead", "win"]) {
       el(s).classList.toggle("hidden", s !== id);
     }
   }
