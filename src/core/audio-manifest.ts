@@ -5,7 +5,7 @@
  * the packaged .exe never depend on these files being present.
  *
  * Served from /public at the site root (dev) and copied to dist/ in the build, which
- * the Electron host serves over its fixed loopback port — so absolute paths resolve.
+ * the Electron host serves over its fixed app://dead-air scheme — so absolute paths resolve.
  */
 
 /** looping background score, keyed by the act it underscores */

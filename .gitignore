@@ -1,8 +1,19 @@
 node_modules/
 dist/
 release/
+.cache/
+coverage/
+test-results/
+playwright-report/
+tmp/
+*.tsbuildinfo
+*.log
+.env
+.env.*
+!.env.example
 *.local
 .DS_Store
+Thumbs.db
 scripts/shots/
 
 # improvement-loop artifacts (regenerable; the scripts + goals.json are tracked)
